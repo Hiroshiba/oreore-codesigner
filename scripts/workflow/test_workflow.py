@@ -337,6 +337,37 @@ class WorkflowFixtureTest(unittest.TestCase):
         )
         self.assertIn("rollback status: incomplete", source)
 
+    def test_publish_asset_name_transport_validation(self) -> None:
+        source = PUBLISH_SCRIPT.read_text(encoding="utf-8")
+        match = re.search(r"^validate_asset_name\(\) \{\n.*?^\}\n", source, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(match)
+        validation_function = match.group(0)
+        cases = (
+            ("example.zip", True),
+            (".", False),
+            ("..", False),
+            ("dir/name", False),
+            ("dir\\name", False),
+            ("control\tname", False),
+        )
+        for name, expected_success in cases:
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f'{validation_function}validate_asset_name "$1"',
+                    "workflow-fixture",
+                    name,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if expected_success:
+                self.assertEqual(result.returncode, 0, name)
+            else:
+                self.assertNotEqual(result.returncode, 0, name)
+
     def test_release_false_booleans_are_valid(self) -> None:
         with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:
             release = Path(directory) / "release.json"

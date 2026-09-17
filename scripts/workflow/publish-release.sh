@@ -1187,6 +1187,13 @@ remove_old_metadata() {
 }
 
 operation_error=''
+validate_asset_name() {
+  local name=$1
+  if [[ -z "$name" || "$name" == "." || "$name" == ".." || "$name" =~ [\\/] || "$name" =~ [[:cntrl:]] ]]; then
+    return 1
+  fi
+}
+
 publish_operation() {
   local operation_json=$1
   local action
@@ -1200,8 +1207,8 @@ publish_operation() {
     operation_error='publish planのoperationを解析できません'
     return 1
   fi
-  if [[ "$name" == *$'\n'* || "$name" == *$'\r'* || "$name" == *$'\0'* ]]; then
-    operation_error="asset filenameにtransport上の制御文字があります: $name"
+  if ! validate_asset_name "$name"; then
+    operation_error="asset filenameがtransport上で不正です: $name"
     return 1
   fi
   asset_path="$assets_directory/$name"
