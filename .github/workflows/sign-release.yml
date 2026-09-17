@@ -368,7 +368,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p "$RUNNER_TEMP/macos-assets" "$RUNNER_TEMP/macos-project"
+          mkdir -p "$RUNNER_TEMP/macos-assets"
           bash scripts/workflow/sign-macos.sh \
             "$GITHUB_WORKSPACE" \
             "$RUNNER_TEMP/acquire-source/release-contract.json" \

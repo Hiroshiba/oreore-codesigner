@@ -25,16 +25,20 @@ for required_path in "$contract_path" "$source_manifest_path" "$unsigned_archive
     exit 1
   fi
 done
-for output_path in "$assets_directory" "$package_project"; do
-  if [[ -e "$output_path" || -L "$output_path" ]]; then
-    if [[ ! -d "$output_path" || -n "$(find "$output_path" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
-      printf '出力先は空のdirectoryでなければなりません: %s\n' "$output_path" >&2
-      exit 1
-    fi
-  else
-    mkdir -p -- "$output_path"
+if [[ -e "$package_project" || -L "$package_project" ]]; then
+  printf '%s\n' 'macOS package projectのoutputは生成開始時に存在してはいけません' >&2
+  exit 1
+fi
+package_project_parent=$(dirname -- "$package_project")
+mkdir -p -- "$package_project_parent"
+if [[ -e "$assets_directory" || -L "$assets_directory" ]]; then
+  if [[ ! -d "$assets_directory" || -n "$(find "$assets_directory" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    printf '出力先は空のdirectoryでなければなりません: %s\n' "$assets_directory" >&2
+    exit 1
   fi
-done
+else
+  mkdir -p -- "$assets_directory"
+fi
 
 source_app_id=$(jq -er '.appId' "$source_manifest_path")
 source_repository=$(jq -er '.repository' "$source_manifest_path")
@@ -79,6 +83,7 @@ app_root="$work_directory/app"
 mount_point="$work_directory/dmg"
 keychain_created=false
 mounted=false
+package_project_created=false
 cleanup() {
   local status=$?
   local cleanup_status=0
@@ -98,6 +103,12 @@ cleanup() {
   if ! rm -rf -- "$work_directory"; then
     printf '%s\n' 'macOS signing用一時directoryの削除に失敗しました' >&2
     cleanup_status=1
+  fi
+  if [[ "$package_project_created" == true && ( -e "$package_project" || -L "$package_project" ) ]]; then
+    if ! rm -rf -- "$package_project"; then
+      printf '%s\n' 'macOS package projectの削除に失敗しました' >&2
+      cleanup_status=1
+    fi
   fi
   unset p12_base64
   unset MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD
@@ -246,6 +257,7 @@ if [[ ! -s "$designated_requirement_path" ]]; then
   exit 1
 fi
 
+package_project_created=true
 (cd "$central_root" && CSC_IDENTITY_AUTO_DISCOVERY=false CSC_NAME="$identity_hash" pnpm exec tsx src/cli.ts create-package-project \
   --contract "$contract_path" --target macos --output-directory "$package_project")
 if ! grep -Fq 'gatekeeperAssess: false' "$package_project/electron-builder.yml"; then

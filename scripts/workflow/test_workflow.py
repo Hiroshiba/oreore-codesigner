@@ -22,6 +22,9 @@ EXTRACTOR = ROOT / "safe-extract.py"
 RELEASE_STATE = ROOT / "read-release-state.sh"
 EXTRACT_CERTIFICATE_CN = ROOT / "extract-certificate-cn.sh"
 PUBLISH_SCRIPT = ROOT / "publish-release.sh"
+SIGN_MACOS = ROOT / "sign-macos.sh"
+SIGN_WINDOWS = ROOT / "sign-windows.ps1"
+SIGN_RELEASE_WORKFLOW = ROOT.parent.parent / ".github/workflows/sign-release.yml"
 
 
 def create_archive(path: Path, members: list[tarfile.TarInfo], contents: dict[str, bytes]) -> None:
@@ -367,6 +370,26 @@ class WorkflowFixtureTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, name)
             else:
                 self.assertNotEqual(result.returncode, 0, name)
+
+    def test_package_project_outputs_start_absent_and_are_distinct(self) -> None:
+        macos_source = SIGN_MACOS.read_text(encoding="utf-8")
+        windows_source = SIGN_WINDOWS.read_text(encoding="utf-8")
+        workflow_source = SIGN_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn('for output_path in "$assets_directory" "$package_project"; do', macos_source)
+        self.assertIn('if [[ -e "$assets_directory" || -L "$assets_directory" ]]; then', macos_source)
+        self.assertIn("package_project_created=true", macos_source)
+        self.assertIn('rm -rf -- "$package_project"', macos_source)
+        self.assertIn("Assert-ProjectOutputPath $NormalProject", windows_source)
+        self.assertIn("Assert-ProjectOutputPath $WebProject", windows_source)
+        self.assertNotIn("Assert-EmptyDirectory $NormalProject", windows_source)
+        self.assertNotIn("Assert-EmptyDirectory $WebProject", windows_source)
+        self.assertIn("$normalProjectCreated = $true", windows_source)
+        self.assertIn("$webProjectCreated = $true", windows_source)
+        self.assertIn("Remove-Item -LiteralPath $WebProject", windows_source)
+        self.assertIn("Remove-Item -LiteralPath $NormalProject", windows_source)
+        self.assertIn("normalProjectFullPath", windows_source)
+        self.assertIn("webProjectFullPath", windows_source)
+        self.assertNotIn('mkdir -p "$RUNNER_TEMP/macos-assets" "$RUNNER_TEMP/macos-project"', workflow_source)
 
     def test_release_false_booleans_are_valid(self) -> None:
         with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:

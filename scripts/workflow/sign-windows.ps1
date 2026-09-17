@@ -151,6 +151,24 @@ function Assert-EmptyDirectory([string]$Path) {
   }
 }
 
+function Assert-ProjectOutputPath([string]$Path) {
+  if (Test-Path -LiteralPath $Path) {
+    throw "package projectのoutputは生成開始時に存在してはいけません: $Path"
+  }
+  $parent = Split-Path -LiteralPath $Path -Parent
+  if ([string]::IsNullOrEmpty($parent)) {
+    $parent = (Get-Location).Path
+  }
+  if (Test-Path -LiteralPath $parent) {
+    $parentItem = Get-Item -LiteralPath $parent -Force -ErrorAction Stop
+    if ($parentItem -isnot [System.IO.DirectoryInfo] -or ($parentItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "package projectの親pathが通常directoryではありません: $parent"
+    }
+  } else {
+    New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null
+  }
+}
+
 function Get-CentralPath([string]$RelativePath) {
   if ($RelativePath -notmatch '^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$') {
     throw "中央repo内のpathが不正です: $RelativePath"
@@ -252,8 +270,13 @@ foreach ($inputPath in @($ContractPath, $SourceManifestPath, $UnsignedArchive)) 
   Assert-RegularFile $inputPath '入力pathが通常fileではありません'
 }
 Assert-EmptyDirectory $AssetsDirectory
-Assert-EmptyDirectory $NormalProject
-Assert-EmptyDirectory $WebProject
+$normalProjectFullPath = [System.IO.Path]::GetFullPath($NormalProject)
+$webProjectFullPath = [System.IO.Path]::GetFullPath($WebProject)
+if ([string]::Equals($normalProjectFullPath, $webProjectFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw '通常NSISとWebSetupのpackage project outputが同一です'
+}
+Assert-ProjectOutputPath $NormalProject
+Assert-ProjectOutputPath $WebProject
 
 $contract = Get-Content -LiteralPath $ContractPath -Raw | ConvertFrom-Json
 $sourceManifest = Get-Content -LiteralPath $SourceManifestPath -Raw | ConvertFrom-Json
@@ -300,6 +323,8 @@ $myStoreImportAttempted = $false
 $signTool = $null
 $pfxBase64 = $null
 $pfxPasswordPlain = $null
+$normalProjectCreated = $false
+$webProjectCreated = $false
 
 try {
   New-Item -ItemType Directory -Path $temporaryDirectory -ErrorAction Stop | Out-Null
@@ -436,8 +461,10 @@ try {
   $env:WIN_CSC_KEY_PASSWORD = $pfxPasswordPlain
   Push-Location $CentralRoot
   try {
+    $normalProjectCreated = $true
     & pnpm exec tsx src/cli.ts create-package-project --contract $ContractPath --target windows-nsis --output-directory $NormalProject
     Assert-ExternalSuccess '通常NSIS package projectの生成に失敗しました'
+    $webProjectCreated = $true
     & pnpm exec tsx src/cli.ts create-package-project --contract $ContractPath --target windows-nsis-web --output-directory $WebProject
     Assert-ExternalSuccess 'WebSetup package projectの生成に失敗しました'
   } finally {
@@ -555,6 +582,12 @@ try {
   }
   if (Test-Path -LiteralPath $temporaryDirectory) {
     try { Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction Stop } catch { [void]$cleanupExceptions.Add($_.Exception) }
+  }
+  if ($webProjectCreated -and (Test-Path -LiteralPath $WebProject)) {
+    try { Remove-Item -LiteralPath $WebProject -Recurse -Force -ErrorAction Stop } catch { [void]$cleanupExceptions.Add($_.Exception) }
+  }
+  if ($normalProjectCreated -and (Test-Path -LiteralPath $NormalProject)) {
+    try { Remove-Item -LiteralPath $NormalProject -Recurse -Force -ErrorAction Stop } catch { [void]$cleanupExceptions.Add($_.Exception) }
   }
   $env:WINDOWS_CERTIFICATE_PFX_BASE64 = $null
   $env:WINDOWS_CERTIFICATE_PASSWORD = $null
