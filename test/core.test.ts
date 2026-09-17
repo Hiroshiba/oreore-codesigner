@@ -4,8 +4,10 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync
 } from "node:fs";
 import { join } from "node:path";
@@ -493,6 +495,21 @@ describe("manifest and publish plan", () => {
     expect(nsisConfig).not.toContain("${productName} Setup");
     expect(webConfig).toContain("publishAutoUpdate: false");
     expect(nsisConfig).not.toContain("publishAutoUpdate");
+    const existingDirectory = join(root, "existing-project");
+    mkdirSync(existingDirectory);
+    createPackageProject(root, contract, "windows-nsis", existingDirectory);
+    expect(existsSync(join(existingDirectory, "package.json"))).toBe(true);
+    expect(readdirSync(root).filter((entry) => entry.startsWith(".personal-signing-")).length).toBe(
+      0
+    );
+    const nonEmptyDirectory = join(root, "non-empty-project");
+    mkdirSync(nonEmptyDirectory);
+    writeFileSync(join(nonEmptyDirectory, "keep.txt"), "keep");
+    expect(() => createPackageProject(root, contract, "windows-nsis", nonEmptyDirectory)).toThrow();
+    expect(readFileSync(join(nonEmptyDirectory, "keep.txt"), "utf8")).toBe("keep");
+    expect(readdirSync(root).filter((entry) => entry.startsWith(".personal-signing-")).length).toBe(
+      0
+    );
     const realParent = join(root, "project-parent");
     mkdirSync(realParent);
     const parentLink = join(root, "project-parent-link");
@@ -500,6 +517,26 @@ describe("manifest and publish plan", () => {
     expect(() =>
       createPackageProject(root, contract, "windows-nsis", join(parentLink, "project"))
     ).toThrow();
+  });
+
+  it("output symlinkの差し替えで外部entryを変更しない", () => {
+    const root = temporaryDirectory();
+    writeConfiguration(root, validApplication());
+    writeSource(root, undefined);
+    const contract = validateSource(root, prepareContract(root, "demo-app", "v1.2.3", false), root);
+    for (let index = 0; index < 20; index += 1) {
+      const output = join(root, `project-${index}`);
+      const external = join(root, `external-${index}`);
+      mkdirSync(external);
+      writeFileSync(join(external, "sentinel.txt"), "sentinel");
+      symlinkSync(external, output);
+      expect(() => createPackageProject(root, contract, "windows-nsis", output)).toThrow();
+      expect(readdirSync(external)).toEqual(["sentinel.txt"]);
+      unlinkSync(output);
+    }
+    expect(readdirSync(root).filter((entry) => entry.startsWith(".personal-signing-")).length).toBe(
+      0
+    );
   });
 
   it("macOS entitlementsを固定名へコピーして相対参照する", () => {
@@ -542,9 +579,15 @@ describe("manifest and publish plan", () => {
       prepareContract(missingRoot, "demo-app", "v1.2.3", false),
       missingRoot
     );
+    const missingOutput = join(missingRoot, "output");
+    mkdirSync(missingOutput);
     expect(() =>
-      createPackageProject(missingRoot, missingContract, "macos", join(missingRoot, "output"))
+      createPackageProject(missingRoot, missingContract, "macos", missingOutput)
     ).toThrow(/entitlements/);
+    expect(readdirSync(missingOutput)).toEqual([]);
+    expect(
+      readdirSync(missingRoot).filter((entry) => entry.startsWith(".personal-signing-")).length
+    ).toBe(0);
 
     const symlinkRoot = temporaryDirectory();
     const symlinkApplication = validApplication();
