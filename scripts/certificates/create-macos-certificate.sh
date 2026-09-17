@@ -20,7 +20,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   fail 'このスクリプトはmacOSで実行してください。'
 fi
 
-for required_command in openssl security mktemp chmod awk grep; do
+for required_command in uname openssl security mktemp chmod awk grep cmp mv cat rm; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     fail "必要なコマンドが見つかりません: $required_command"
   fi
@@ -85,26 +85,70 @@ if [[ "$p12_password" != "$p12_password_confirmation" ]]; then
   fail 'P12 passwordが一致しません。'
 fi
 
-private_key_path="$output_directory/private-key.pem"
-certificate_pem_path="$output_directory/certificate.pem"
-certificate_der_path="$output_directory/certificate.cer"
-p12_path="$output_directory/certificate.p12"
-fingerprint_path="$output_directory/fingerprint.txt"
-
-for artifact_path in "$private_key_path" "$certificate_pem_path" "$certificate_der_path" "$p12_path" "$fingerprint_path"; do
+for artifact_path in \
+  "$output_directory/certificate.pem" \
+  "$output_directory/certificate.cer" \
+  "$output_directory/certificate.p12" \
+  "$output_directory/fingerprint.txt"; do
   if [[ -e "$artifact_path" || -L "$artifact_path" ]]; then
-    unset p12_password p12_password_confirmation
     fail "出力ファイルが既に存在します: $artifact_path"
   fi
 done
 
 umask 077
 temp_directory=$(mktemp -d "${TMPDIR:-/tmp}/personal-signing.XXXXXXXX")
-trap 'unset p12_password p12_password_confirmation; rm -rf -- "$temp_directory"' EXIT
+
+committed_paths=()
+cleanup_output=true
+
+cleanup() {
+  local status=$?
+  local cleanup_failed=0
+  local cleanup_detail=''
+
+  trap - EXIT
+  if [[ "$cleanup_output" == true ]]; then
+    for committed_path in "${committed_paths[@]}"; do
+      if [[ -e "$committed_path" || -L "$committed_path" ]]; then
+        if ! rm -f -- "$committed_path"; then
+          cleanup_failed=1
+          cleanup_detail="${cleanup_detail} 出力削除失敗: $committed_path"
+        fi
+      fi
+    done
+  fi
+  if [[ -d "$temp_directory" ]]; then
+    if ! rm -rf -- "$temp_directory"; then
+      cleanup_failed=1
+      cleanup_detail="${cleanup_detail} 一時directory削除失敗: $temp_directory"
+    fi
+  fi
+  unset p12_password p12_password_confirmation
+  if (( cleanup_failed != 0 )); then
+    printf 'エラー: cleanupに失敗しました。%s\n' "$cleanup_detail" >&2
+    if (( status == 0 )); then
+      status=1
+    fi
+  fi
+  exit "$status"
+}
+
+trap cleanup EXIT
 
 openssl_config_path="$temp_directory/openssl.cnf"
 certificate_text_path="$temp_directory/certificate.txt"
+subject_text_path="$temp_directory/subject.txt"
 private_key_text_path="$temp_directory/private-key.txt"
+private_key_path="$temp_directory/private-key.pem"
+certificate_pem_path="$temp_directory/certificate.pem"
+certificate_der_path="$temp_directory/certificate.cer"
+p12_path="$temp_directory/certificate.p12"
+fingerprint_path="$temp_directory/fingerprint.txt"
+reimport_certificate_pem_path="$temp_directory/reimport-certificate.pem"
+reimport_certificate_der_path="$temp_directory/reimport-certificate.cer"
+reimport_key_path="$temp_directory/reimport-key.pem"
+public_key_path="$temp_directory/public-key.der"
+reimport_public_key_path="$temp_directory/reimport-public-key.der"
 
 cat > "$openssl_config_path" <<EOF
 [ req ]
@@ -145,6 +189,10 @@ if ! grep -Fq '3072 bit' "$private_key_text_path"; then
 fi
 
 openssl x509 -in "$certificate_pem_path" -noout -text > "$certificate_text_path"
+openssl x509 -in "$certificate_pem_path" -noout -subject -nameopt RFC2253 > "$subject_text_path"
+if ! grep -Fqx "subject=CN=$display_name" "$subject_text_path"; then
+  fail '生成された証明書のsubjectが指定値と一致しません。'
+fi
 if ! grep -Fq 'sha256WithRSAEncryption' "$certificate_text_path"; then
   fail '生成された証明書の署名アルゴリズムがSHA-256ではありません。'
 fi
@@ -171,11 +219,64 @@ openssl pkcs12 \
   -passout fd:3 \
   3<<<"$p12_password"
 
+openssl pkcs12 \
+  -in "$p12_path" \
+  -passin fd:3 \
+  -clcerts \
+  -nokeys \
+  -out "$reimport_certificate_pem_path" \
+  3<<<"$p12_password"
+openssl x509 \
+  -in "$reimport_certificate_pem_path" \
+  -outform DER \
+  -out "$reimport_certificate_der_path"
+if ! cmp -s "$certificate_der_path" "$reimport_certificate_der_path"; then
+  fail 'P12から再取得した証明書がDER CERと一致しません。'
+fi
+
+openssl pkcs12 \
+  -in "$p12_path" \
+  -passin fd:3 \
+  -nocerts \
+  -nodes \
+  -out "$reimport_key_path" \
+  3<<<"$p12_password"
+openssl rsa -in "$reimport_key_path" -check -noout >/dev/null 2>&1
+openssl pkey -in "$private_key_path" -pubout -outform DER -out "$public_key_path"
+openssl pkey -in "$reimport_key_path" -pubout -outform DER -out "$reimport_public_key_path"
+if ! cmp -s "$public_key_path" "$reimport_public_key_path"; then
+  fail 'P12から再取得した秘密鍵が生成元の鍵と一致しません。'
+fi
+
 printf 'subject=CN=%s\nsha1_fingerprint=%s\nsha256_fingerprint=%s\nvalidity_days=%s\n' \
   "$display_name" "$sha1_fingerprint" "$sha256_fingerprint" "$validity_days" > "$fingerprint_path"
 
-chmod 600 "$private_key_path" "$p12_path"
-chmod 644 "$certificate_pem_path" "$certificate_der_path" "$fingerprint_path"
-unset p12_password p12_password_confirmation
+mv -n "$certificate_pem_path" "$output_directory/certificate.pem"
+if [[ -e "$certificate_pem_path" || -L "$certificate_pem_path" ]]; then
+  fail '公開PEMの出力先が既に存在します。'
+fi
+committed_paths+=("$output_directory/certificate.pem")
+
+mv -n "$certificate_der_path" "$output_directory/certificate.cer"
+if [[ -e "$certificate_der_path" || -L "$certificate_der_path" ]]; then
+  fail 'DER CERの出力先が既に存在します。'
+fi
+committed_paths+=("$output_directory/certificate.cer")
+
+mv -n "$p12_path" "$output_directory/certificate.p12"
+if [[ -e "$p12_path" || -L "$p12_path" ]]; then
+  fail 'P12の出力先が既に存在します。'
+fi
+committed_paths+=("$output_directory/certificate.p12")
+
+mv -n "$fingerprint_path" "$output_directory/fingerprint.txt"
+if [[ -e "$fingerprint_path" || -L "$fingerprint_path" ]]; then
+  fail 'fingerprint情報の出力先が既に存在します。'
+fi
+committed_paths+=("$output_directory/fingerprint.txt")
+
+chmod 600 "$output_directory/certificate.p12"
+chmod 644 "$output_directory/certificate.pem" "$output_directory/certificate.cer" "$output_directory/fingerprint.txt"
+cleanup_output=false
 
 printf '証明書を生成しました: %s\n' "$output_directory"
