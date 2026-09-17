@@ -1,0 +1,79 @@
+name: verify
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CENTRAL_PNPM_VERSION: 10.30.2
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+
+      - name: pnpmを固定してinstall
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          corepack enable
+          corepack prepare "pnpm@$CENTRAL_PNPM_VERSION" --activate
+          [[ "$(pnpm --version)" == "$CENTRAL_PNPM_VERSION" ]]
+          pnpm install --frozen-lockfile
+
+      - name: formatを検証
+        run: pnpm format:check
+
+      - name: lintを検証
+        run: pnpm lint
+
+      - name: typecheckを検証
+        run: pnpm typecheck
+
+      - name: testを検証
+        run: pnpm test
+
+      - name: workflowとactionを検証
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          actionlint
+          while IFS= read -r line; do
+            if [[ ! "$line" =~ uses:[[:space:]][^@[:space:]]+@[0-9A-Fa-f]{40}([[:space:]]|$) ]]; then
+              printf '40桁SHAで固定されていないactionがあります: %s\n' "$line" >&2
+              exit 1
+            fi
+          done < <(rg --hidden --glob '*.yml' '^[[:space:]]*uses:' .github)
+
+      - name: shell scriptを検証
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -d '' files < <(rg --files -g '*.sh' scripts/workflow -0)
+          if (( ${#files[@]} > 0 )); then
+            shellcheck --shell=bash "${files[@]}"
+          fi
+
+      - name: PowerShell parserを検証
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if command -v pwsh >/dev/null 2>&1; then
+            while IFS= read -r -d '' file; do
+              pwsh -NoProfile -NonInteractive -Command "\$tokens = \$null; \$errors = \$null; [System.Management.Automation.Language.Parser]::ParseFile(\$args[0], [ref]\$tokens, [ref]\$errors) | Out-Null; if (\$errors.Count -gt 0) { \$errors | ForEach-Object { \$_.ToString() }; exit 1 }" "$file"
+            done < <(rg --files -g '*.ps1' scripts/workflow -0)
+          fi

@@ -1,0 +1,596 @@
+name: sign-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: allowlistに登録したapp_id
+        required: true
+        type: string
+      tag:
+        description: 対象sourceの固定tag
+        required: true
+        type: string
+      replace_existing_assets:
+        description: replaceable releaseの同名assetを置換する
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signing-${{ inputs.app_id }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CENTRAL_PNPM_VERSION: 10.30.2
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      app_id: ${{ steps.contract.outputs.app_id }}
+      tag: ${{ steps.contract.outputs.tag }}
+      repository: ${{ steps.contract.outputs.repository }}
+      owner: ${{ steps.contract.outputs.owner }}
+      repo: ${{ steps.contract.outputs.repo }}
+      config_digest: ${{ steps.contract.outputs.config_digest }}
+      working_directory: ${{ steps.contract.outputs.working_directory }}
+      package_name: ${{ steps.contract.outputs.package_name }}
+      pnpm_version: ${{ steps.contract.outputs.pnpm_version }}
+      macos_runner: ${{ steps.contract.outputs.macos_runner }}
+      macos_architecture: ${{ steps.contract.outputs.macos_architecture }}
+      macos_build_script: ${{ steps.contract.outputs.macos_build_script }}
+      macos_entitlements: ${{ steps.contract.outputs.macos_entitlements }}
+      macos_entitlements_inherit: ${{ steps.contract.outputs.macos_entitlements_inherit }}
+      windows_runner: ${{ steps.contract.outputs.windows_runner }}
+      windows_architecture: ${{ steps.contract.outputs.windows_architecture }}
+      windows_build_script: ${{ steps.contract.outputs.windows_build_script }}
+      central_sha: ${{ steps.central_sha.outputs.sha }}
+    steps:
+      - name: default branchからのdispatchだけを許可
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            printf 'default branch以外からのdispatchは許可されていません: %s\n' "$GITHUB_REF" >&2
+            exit 1
+          fi
+
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+
+      - name: 中央依存を固定してinstall
+        run: bash scripts/workflow/setup-central.sh "$CENTRAL_PNPM_VERSION"
+
+      - name: prepared contractを生成
+        id: contract
+        env:
+          DISPATCH_APP_ID: ${{ inputs.app_id }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+          DISPATCH_REPLACE_EXISTING_ASSETS: ${{ inputs.replace_existing_assets }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm exec tsx src/cli.ts prepare \
+            --app-id "$DISPATCH_APP_ID" \
+            --tag "$DISPATCH_TAG" \
+            --replace-existing-assets "$DISPATCH_REPLACE_EXISTING_ASSETS" \
+            --output "$RUNNER_TEMP/prepared-contract.json"
+          bash scripts/workflow/emit-contract-outputs.sh "$RUNNER_TEMP/prepared-contract.json"
+
+      - name: 中央commitを記録
+        id: central_sha
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'sha=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: prepared contractをartifact化
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: central-${{ github.run_id }}-${{ steps.contract.outputs.app_id }}-prepare
+          if-no-files-found: error
+          path: ${{ runner.temp }}/prepared-contract.json
+
+  acquire-source:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.prepare.outputs.central_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+
+      - name: 中央依存を固定してinstall
+        run: bash scripts/workflow/setup-central.sh "$CENTRAL_PNPM_VERSION"
+
+      - name: prepared contractを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-prepare
+          path: ${{ runner.temp }}/prepare
+
+      - name: source取得用App tokenを発行
+        env:
+          SIGNING_APP_ID: ${{ vars.SIGNING_APP_ID }}
+          SIGNING_APP_PRIVATE_KEY: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
+          CENTRAL_TARGET_REPOSITORY: ${{ needs.prepare.outputs.repository }}
+          CENTRAL_APP_TOKEN_OUTPUT: ${{ runner.temp }}/source-app-token.txt
+        shell: bash
+        run: bash scripts/workflow/mint-app-token.sh read
+
+      - name: 固定SHAのsource archiveを生成
+        env:
+          CENTRAL_APP_TOKEN_FILE: ${{ runner.temp }}/source-app-token.txt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          token_file="$CENTRAL_APP_TOKEN_FILE"
+          cleanup() {
+            local status=$?
+            local cleanup_status=0
+            if ! rm -f -- "$token_file"; then
+              printf '%s\n' 'source取得tokenの削除に失敗しました' >&2
+              cleanup_status=1
+            fi
+            if (( status != 0 )); then
+              exit "$status"
+            fi
+            exit "$cleanup_status"
+          }
+          trap cleanup EXIT
+          mkdir -p "$RUNNER_TEMP/source-output"
+          bash scripts/workflow/acquire-source.sh \
+            "$RUNNER_TEMP/prepare/prepared-contract.json" \
+            "$RUNNER_TEMP/source-output" \
+            "$RUNNER_TEMP/source-output/source.tar" \
+            "$RUNNER_TEMP/source-output/source-manifest.json"
+
+      - name: source archiveをartifact化
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/source-output/source.tar
+            ${{ runner.temp }}/source-output/source-manifest.json
+
+  build-macos:
+    needs: [prepare, acquire-source]
+    runs-on: ${{ needs.prepare.outputs.macos_runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.prepare.outputs.central_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+
+      - name: prepared contractを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-prepare
+          path: ${{ runner.temp }}/prepare
+
+      - name: source archiveを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
+          path: ${{ runner.temp }}/source-artifact
+
+      - name: 中央依存を固定してinstall
+        run: bash scripts/workflow/setup-central.sh "$CENTRAL_PNPM_VERSION"
+
+      - name: 秘密なしsource build
+        env:
+          CENTRAL_BUILD_ARCH: ${{ needs.prepare.outputs.macos_architecture }}
+          CENTRAL_PREPACKAGED_DIR: ${{ runner.temp }}/prepackaged
+          CENTRAL_SOURCE_TAG: ${{ needs.prepare.outputs.tag }}
+          CENTRAL_BUILD_SCRIPT: ${{ needs.prepare.outputs.macos_build_script }}
+          CENTRAL_WORKING_DIRECTORY: ${{ needs.prepare.outputs.working_directory }}
+          CENTRAL_SOURCE_PNPM_VERSION: ${{ needs.prepare.outputs.pnpm_version }}
+          SOURCE_DATE_EPOCH: "0"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          prepare="$RUNNER_TEMP/prepare/prepared-contract.json"
+          source_manifest="$RUNNER_TEMP/source-artifact/source-manifest.json"
+          source_archive="$RUNNER_TEMP/source-artifact/source.tar"
+          bash scripts/workflow/validate-source-manifest.sh "$prepare" "$source_manifest"
+          source_epoch="$(jq -er '.commitTimestamp' "$source_manifest")"
+          export SOURCE_DATE_EPOCH="$source_epoch"
+          source_parent="$RUNNER_TEMP/source-extracted"
+          bash scripts/workflow/extract-archive.sh "$source_archive" "$source_parent"
+          source_root="$source_parent/source"
+          bash scripts/workflow/build-source.sh macos "$source_root" \
+            "$CENTRAL_WORKING_DIRECTORY" \
+            "$CENTRAL_BUILD_SCRIPT" \
+            "$CENTRAL_SOURCE_PNPM_VERSION" \
+            "$(jq -er '.sourceSha' "$source_manifest")" \
+            "$CENTRAL_SOURCE_TAG" \
+            "$RUNNER_TEMP/unsigned-app.tar"
+          corepack prepare "pnpm@$CENTRAL_PNPM_VERSION" --activate
+          [[ "$(pnpm --version)" == "$CENTRAL_PNPM_VERSION" ]]
+          (cd "$GITHUB_WORKSPACE" && pnpm exec tsx src/cli.ts validate-source \
+            --contract "$prepare" --source-directory "$source_root" \
+            --output "$RUNNER_TEMP/release-contract.json")
+          mkdir -p "$RUNNER_TEMP/build-output"
+          cp -- "$RUNNER_TEMP/unsigned-app.tar" "$RUNNER_TEMP/build-output/unsigned-app.tar"
+          cp -- "$RUNNER_TEMP/release-contract.json" "$RUNNER_TEMP/build-output/release-contract.json"
+          cp -- "$source_manifest" "$RUNNER_TEMP/build-output/source-manifest.json"
+
+      - name: macOS build artifactを保存
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-macos-build
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/build-output/unsigned-app.tar
+            ${{ runner.temp }}/build-output/release-contract.json
+            ${{ runner.temp }}/build-output/source-manifest.json
+
+  build-windows:
+    needs: [prepare, acquire-source]
+    runs-on: ${{ needs.prepare.outputs.windows_runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.prepare.outputs.central_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+
+      - name: prepared contractを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-prepare
+          path: ${{ runner.temp }}/prepare
+
+      - name: source archiveを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
+          path: ${{ runner.temp }}/source-artifact
+
+      - name: 中央依存を固定してinstall
+        run: bash scripts/workflow/setup-central.sh "$CENTRAL_PNPM_VERSION"
+
+      - name: 秘密なしsource build
+        env:
+          CENTRAL_BUILD_ARCH: ${{ needs.prepare.outputs.windows_architecture }}
+          CENTRAL_PREPACKAGED_DIR: ${{ runner.temp }}/prepackaged
+          CENTRAL_SOURCE_TAG: ${{ needs.prepare.outputs.tag }}
+          CENTRAL_BUILD_SCRIPT: ${{ needs.prepare.outputs.windows_build_script }}
+          CENTRAL_WORKING_DIRECTORY: ${{ needs.prepare.outputs.working_directory }}
+          CENTRAL_SOURCE_PNPM_VERSION: ${{ needs.prepare.outputs.pnpm_version }}
+          SOURCE_DATE_EPOCH: "0"
+        shell: pwsh
+        run: |
+          $prepare = Join-Path $env:RUNNER_TEMP 'prepare/prepared-contract.json'
+          $sourceManifest = Join-Path $env:RUNNER_TEMP 'source-artifact/source-manifest.json'
+          $sourceArchive = Join-Path $env:RUNNER_TEMP 'source-artifact/source.tar'
+          & bash "$env:GITHUB_WORKSPACE/scripts/workflow/validate-source-manifest.sh" $prepare $sourceManifest
+          if ($LASTEXITCODE -ne 0) { throw 'source manifestの検証に失敗しました' }
+          $sourceEpoch = (jq -er '.commitTimestamp' $sourceManifest)
+          $env:SOURCE_DATE_EPOCH = $sourceEpoch
+          $sourceParent = Join-Path $env:RUNNER_TEMP 'source-extracted'
+          & bash "$env:GITHUB_WORKSPACE/scripts/workflow/extract-archive.sh" $sourceArchive $sourceParent
+          if ($LASTEXITCODE -ne 0) { throw 'source archiveの展開に失敗しました' }
+          $sourceRoot = Join-Path $sourceParent 'source'
+          $sourceSha = jq -er '.sourceSha' $sourceManifest
+          & "$env:GITHUB_WORKSPACE/scripts/workflow/build-source.ps1" -Platform windows -SourceRoot $sourceRoot -WorkingDirectory $env:CENTRAL_WORKING_DIRECTORY -BuildScript $env:CENTRAL_BUILD_SCRIPT -PnpmVersion $env:CENTRAL_SOURCE_PNPM_VERSION -SourceSha $sourceSha -SourceTag $env:CENTRAL_SOURCE_TAG -ArchivePath (Join-Path $env:RUNNER_TEMP 'unsigned-app.tar')
+          if ($LASTEXITCODE -ne 0) { throw 'source buildに失敗しました' }
+          corepack prepare "pnpm@$env:CENTRAL_PNPM_VERSION" --activate
+          if ($LASTEXITCODE -ne 0) { throw '中央pnpmの準備に失敗しました' }
+          if ((pnpm --version) -ne $env:CENTRAL_PNPM_VERSION) { throw '中央pnpm versionの復元に失敗しました' }
+          Push-Location $env:GITHUB_WORKSPACE
+          try {
+            & pnpm exec tsx src/cli.ts validate-source --contract $prepare --source-directory $sourceRoot --output (Join-Path $env:RUNNER_TEMP 'release-contract.json')
+            if ($LASTEXITCODE -ne 0) { throw 'release contractの生成に失敗しました' }
+          } finally {
+            Pop-Location
+          }
+          $buildOutput = Join-Path $env:RUNNER_TEMP 'build-output'
+          New-Item -ItemType Directory -Path $buildOutput -ErrorAction Stop | Out-Null
+          Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'unsigned-app.tar') -Destination (Join-Path $buildOutput 'unsigned-app.tar')
+          Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'release-contract.json') -Destination (Join-Path $buildOutput 'release-contract.json')
+          Copy-Item -LiteralPath $sourceManifest -Destination (Join-Path $buildOutput 'source-manifest.json')
+
+      - name: Windows build artifactを保存
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-windows-build
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/build-output/unsigned-app.tar
+            ${{ runner.temp }}/build-output/release-contract.json
+            ${{ runner.temp }}/build-output/source-manifest.json
+
+  sign-package-macos:
+    needs: [prepare, build-macos]
+    runs-on: ${{ needs.prepare.outputs.macos_runner }}
+    environment: macos-signing
+    permissions:
+      contents: read
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.prepare.outputs.central_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+
+      - name: macOS build artifactを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-macos-build
+          path: ${{ runner.temp }}/macos-build
+
+      - name: 中央依存を固定してinstall
+        run: bash scripts/workflow/setup-central.sh "$CENTRAL_PNPM_VERSION"
+
+      - name: macOS署名と梱包
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/macos-assets" "$RUNNER_TEMP/macos-project"
+          bash scripts/workflow/sign-macos.sh \
+            "$GITHUB_WORKSPACE" \
+            "$RUNNER_TEMP/macos-build/release-contract.json" \
+            "$RUNNER_TEMP/macos-build/source-manifest.json" \
+            "$RUNNER_TEMP/macos-build/unsigned-app.tar" \
+            "$RUNNER_TEMP/macos-assets" \
+            "$RUNNER_TEMP/macos-assets.tar" \
+            "$RUNNER_TEMP/macos-project" \
+            "$RUNNER_TEMP/designated-requirement.txt"
+
+      - name: macOS signed artifactを保存
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-macos-signed
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/macos-assets.tar
+            ${{ runner.temp }}/macos-build/release-contract.json
+            ${{ runner.temp }}/macos-build/source-manifest.json
+            ${{ runner.temp }}/designated-requirement.txt
+
+  sign-package-windows:
+    needs: [prepare, build-windows]
+    runs-on: ${{ needs.prepare.outputs.windows_runner }}
+    environment: windows-signing
+    permissions:
+      contents: read
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.prepare.outputs.central_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+
+      - name: Windows build artifactを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-windows-build
+          path: ${{ runner.temp }}/windows-build
+
+      - name: 中央依存を固定してinstall
+        shell: pwsh
+        run: |
+          & bash "$env:GITHUB_WORKSPACE/scripts/workflow/setup-central.sh" "$env:CENTRAL_PNPM_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw '中央依存のinstallに失敗しました' }
+
+      - name: Windows署名と梱包
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          & "$env:GITHUB_WORKSPACE/scripts/workflow/sign-windows.ps1" -CentralRoot $env:GITHUB_WORKSPACE -ContractPath (Join-Path $env:RUNNER_TEMP 'windows-build/release-contract.json') -SourceManifestPath (Join-Path $env:RUNNER_TEMP 'windows-build/source-manifest.json') -UnsignedArchive (Join-Path $env:RUNNER_TEMP 'windows-build/unsigned-app.tar') -AssetsDirectory (Join-Path $env:RUNNER_TEMP 'windows-assets') -AssetsArchive (Join-Path $env:RUNNER_TEMP 'windows-assets.tar') -NormalProject (Join-Path $env:RUNNER_TEMP 'windows-normal-project') -WebProject (Join-Path $env:RUNNER_TEMP 'windows-web-project')
+          if ($LASTEXITCODE -ne 0) { throw 'Windows signingに失敗しました' }
+
+      - name: Windows signed artifactを保存
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-windows-signed
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/windows-assets.tar
+            ${{ runner.temp }}/windows-build/release-contract.json
+            ${{ runner.temp }}/windows-build/source-manifest.json
+
+  assemble-release:
+    needs: [prepare, sign-package-macos, sign-package-windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.prepare.outputs.central_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+
+      - name: macOS signed artifactを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-macos-signed
+          path: ${{ runner.temp }}/macos-signed
+
+      - name: Windows signed artifactを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-windows-signed
+          path: ${{ runner.temp }}/windows-signed
+
+      - name: 中央依存を固定してinstall
+        run: bash scripts/workflow/setup-central.sh "$CENTRAL_PNPM_VERSION"
+
+      - name: release setを完成させる
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash scripts/workflow/assemble-release.sh \
+            "$GITHUB_WORKSPACE" \
+            "$RUNNER_TEMP/macos-signed/release-contract.json" \
+            "$RUNNER_TEMP/windows-signed/release-contract.json" \
+            "$RUNNER_TEMP/macos-signed/source-manifest.json" \
+            "$RUNNER_TEMP/windows-signed/source-manifest.json" \
+            "$RUNNER_TEMP/macos-signed/macos-assets.tar" \
+            "$RUNNER_TEMP/windows-signed/windows-assets.tar" \
+            "$RUNNER_TEMP/release-set" \
+            "$RUN_URL"
+
+      - name: release setをartifact化
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-release
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/release-set/release-assets.tar
+            ${{ runner.temp }}/release-set/release-contract.json
+            ${{ runner.temp }}/release-set/release-manifest.json
+            ${{ runner.temp }}/release-set/source-manifest.json
+            ${{ runner.temp }}/release-set/build-manifest.json
+
+  publish-release:
+    needs: [prepare, assemble-release]
+    runs-on: ubuntu-24.04
+    environment: release-publish
+    permissions:
+      contents: read
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.prepare.outputs.central_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.x
+
+      - name: release setを取得
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-release
+          path: ${{ runner.temp }}/release-set
+
+      - name: 中央依存を固定してinstall
+        run: bash scripts/workflow/setup-central.sh "$CENTRAL_PNPM_VERSION"
+
+      - name: 公開用App tokenを発行
+        env:
+          SIGNING_APP_ID: ${{ vars.SIGNING_APP_ID }}
+          SIGNING_APP_PRIVATE_KEY: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
+          CENTRAL_TARGET_REPOSITORY: ${{ needs.prepare.outputs.repository }}
+          CENTRAL_APP_TOKEN_OUTPUT: ${{ runner.temp }}/publish-app-token.txt
+        shell: bash
+        run: bash scripts/workflow/mint-app-token.sh write
+
+      - name: Releaseへassetを公開
+        env:
+          CENTRAL_APP_TOKEN_FILE: ${{ runner.temp }}/publish-app-token.txt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          token_file="$CENTRAL_APP_TOKEN_FILE"
+          cleanup() {
+            local status=$?
+            local cleanup_status=0
+            if ! rm -f -- "$token_file"; then
+              printf '%s\n' '公開tokenの削除に失敗しました' >&2
+              cleanup_status=1
+            fi
+            if (( status != 0 )); then
+              exit "$status"
+            fi
+            exit "$cleanup_status"
+          }
+          trap cleanup EXIT
+          bash scripts/workflow/publish-release.sh \
+            "$GITHUB_WORKSPACE" \
+            "$RUNNER_TEMP/release-set/release-contract.json" \
+            "$RUNNER_TEMP/release-set/release-manifest.json" \
+            "$RUNNER_TEMP/release-set/source-manifest.json" \
+            "$RUNNER_TEMP/release-set/build-manifest.json" \
+            "$RUNNER_TEMP/release-set/release-assets.tar"
