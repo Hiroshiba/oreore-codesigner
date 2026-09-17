@@ -27,6 +27,9 @@ concurrency:
 env:
   CENTRAL_NODE_VERSION: 22.14.0
   CENTRAL_PNPM_VERSION: 10.30.2
+  CENTRAL_CURL_MAX_SECONDS: "300"
+  CENTRAL_OPERATION_TIMEOUT_SECONDS: "3000"
+  CENTRAL_ROLLBACK_RESERVE_SECONDS: "300"
 
 jobs:
   prepare:
@@ -113,7 +116,11 @@ jobs:
 
   acquire-source:
     needs: prepare
+    concurrency:
+      group: signing-source-${{ needs.prepare.outputs.repository }}-${{ needs.prepare.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
+    timeout-minutes: 55
     permissions:
       contents: read
     steps:
@@ -176,6 +183,9 @@ jobs:
 
   build-macos:
     needs: [prepare, acquire-source]
+    concurrency:
+      group: signing-source-${{ needs.prepare.outputs.repository }}-${{ needs.prepare.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ${{ needs.prepare.outputs.macos_runner }}
     permissions:
       contents: read
@@ -243,6 +253,9 @@ jobs:
 
   build-windows:
     needs: [prepare, acquire-source]
+    concurrency:
+      group: signing-source-${{ needs.prepare.outputs.repository }}-${{ needs.prepare.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ${{ needs.prepare.outputs.windows_runner }}
     permissions:
       contents: read
@@ -311,6 +324,9 @@ jobs:
 
   sign-package-macos:
     needs: [prepare, acquire-source, build-macos]
+    concurrency:
+      group: signing-source-${{ needs.prepare.outputs.repository }}-${{ needs.prepare.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ${{ needs.prepare.outputs.macos_runner }}
     environment: macos-signing
     permissions:
@@ -374,6 +390,9 @@ jobs:
 
   sign-package-windows:
     needs: [prepare, acquire-source, build-windows]
+    concurrency:
+      group: signing-source-${{ needs.prepare.outputs.repository }}-${{ needs.prepare.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ${{ needs.prepare.outputs.windows_runner }}
     environment: windows-signing
     permissions:
@@ -430,6 +449,9 @@ jobs:
 
   assemble-release:
     needs: [prepare, acquire-source, sign-package-macos, sign-package-windows]
+    concurrency:
+      group: signing-source-${{ needs.prepare.outputs.repository }}-${{ needs.prepare.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -500,7 +522,11 @@ jobs:
 
   publish-release:
     needs: [prepare, acquire-source, assemble-release]
+    concurrency:
+      group: signing-source-${{ needs.prepare.outputs.repository }}-${{ needs.prepare.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
+    timeout-minutes: 55
     environment: release-publish
     permissions:
       contents: read

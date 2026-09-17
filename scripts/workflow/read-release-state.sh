@@ -12,9 +12,12 @@ if [[ ! -f "$release_path" || -L "$release_path" ]]; then
   exit 1
 fi
 
-jq -e '
+if ! jq -e '
   (.draft | type == "boolean") and
   (.prerelease | type == "boolean") and
-  ((.immutable // false) | type == "boolean")
-' "$release_path" >/dev/null
-jq -c '{draft: (.draft | tostring), prerelease: (.prerelease | tostring), immutable: ((.immutable // false) | tostring)}' "$release_path"
+  (has("immutable") and (.immutable | type == "boolean"))
+' "$release_path" >/dev/null; then
+  printf '%s\n' 'Release JSONの状態が不正です' >&2
+  exit 1
+fi
+jq -c '{draft: (.draft | tostring), prerelease: (.prerelease | tostring), immutable: (.immutable | tostring)}' "$release_path"

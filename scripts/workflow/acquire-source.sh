@@ -56,11 +56,16 @@ git -C "$checkout_directory" config submodule.recurse false
 git -C "$checkout_directory" remote add origin "https://github.com/${repository}.git"
 if ! GIT_HTTP_EXTRAHEADER="Authorization: Bearer ${token}" \
   GIT_LFS_SKIP_SMUDGE=1 \
-  git -C "$checkout_directory" fetch --no-tags --filter=blob:none --depth=1 origin "$source_sha"; then
+  git -C "$checkout_directory" fetch --no-tags origin "$source_sha"; then
   printf 'source SHAの取得に失敗しました: %s\n' "$source_sha" >&2
   exit 1
 fi
-git -C "$checkout_directory" checkout --quiet --detach FETCH_HEAD
+if ! GIT_HTTP_EXTRAHEADER="Authorization: Bearer ${token}" \
+  GIT_LFS_SKIP_SMUDGE=1 \
+  git -C "$checkout_directory" checkout --quiet --detach FETCH_HEAD; then
+  printf '%s\n' 'source checkoutに失敗しました' >&2
+  exit 1
+fi
 checked_out_sha=$(git -C "$checkout_directory" rev-parse HEAD)
 if [[ "${checked_out_sha,,}" != "${source_sha,,}" ]]; then
   printf 'checkout後のHEADが一致しません: %s\n' "$checked_out_sha" >&2

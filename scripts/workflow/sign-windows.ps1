@@ -90,6 +90,46 @@ function Assert-AuthenticodeSigner([string]$SignTool, [string]$Path, [string]$Ex
   }
 }
 
+function Test-PortableExecutable([System.IO.FileInfo]$File) {
+  if ($File.Length -lt 64) {
+    return $false
+  }
+  $stream = $null
+  $reader = $null
+  try {
+    $stream = [System.IO.File]::Open($File.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    $reader = [System.IO.BinaryReader]::new($stream)
+    if ($reader.ReadUInt16() -ne 0x5a4d) {
+      return $false
+    }
+    $stream.Position = 0x3c
+    $peOffset = $reader.ReadInt32()
+    if ($peOffset -lt 64 -or $peOffset -gt $File.Length - 4) {
+      return $false
+    }
+    $stream.Position = $peOffset
+    $signature = $reader.ReadBytes(4)
+    return $signature.Length -eq 4 -and $signature[0] -eq 0x50 -and $signature[1] -eq 0x45 -and $signature[2] -eq 0 -and $signature[3] -eq 0
+  } finally {
+    if ($null -ne $reader) { $reader.Dispose() }
+    elseif ($null -ne $stream) { $stream.Dispose() }
+  }
+}
+
+function Get-PortableExecutables([string]$Root) {
+  $files = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force)
+  $portableExecutables = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+  foreach ($file in $files) {
+    if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "Windows payloadにreparse pointがあります: $($file.FullName)"
+    }
+    if (Test-PortableExecutable $file) {
+      [void]$portableExecutables.Add($file)
+    }
+  }
+  return @($portableExecutables)
+}
+
 function Assert-RegularFile([string]$Path, [string]$Message) {
   $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
   if ($item -isnot [System.IO.FileInfo] -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -254,6 +294,9 @@ $myStore = $null
 $myStoreOpened = $false
 $addedToMy = $false
 $storeCertificate = $null
+$myStoreBefore = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$myStoreAddedCount = 0
+$myStoreImportAttempted = $false
 $signTool = $null
 $pfxBase64 = $null
 $pfxPasswordPlain = $null
@@ -312,6 +355,10 @@ try {
 
   $myStore = New-Store 'My'
   $myStoreOpened = $true
+  foreach ($certificate in $myStore.Certificates) {
+    $certificateKey = $certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() + '|' + [string]$certificate.HasPrivateKey
+    [void]$myStoreBefore.Add($certificateKey)
+  }
   $existingPrivate = @($myStore.Certificates | Where-Object {
       $_.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() -ceq $expectedFingerprint -and $_.HasPrivateKey
     })
@@ -321,7 +368,22 @@ try {
   if ($existingPrivate.Count -eq 1) {
     $storeCertificate = $existingPrivate[0]
   } else {
+    $myStoreImportAttempted = $true
     $importedCertificates = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation 'Cert:\CurrentUser\My' -Password $securePassword -ErrorAction Stop)
+    $myStore.Close()
+    $myStoreOpened = $false
+    $myStore = New-Store 'My'
+    $myStoreOpened = $true
+    $myStoreAfter = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($certificate in $myStore.Certificates) {
+      $certificateKey = $certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() + '|' + [string]$certificate.HasPrivateKey
+      [void]$myStoreAfter.Add($certificateKey)
+    }
+    $myStoreAddedCount = @($myStoreAfter | Where-Object { -not $myStoreBefore.Contains($_) }).Count
+    if ($myStoreAddedCount -eq 0) {
+      throw 'PFX importによるCurrentUser Myの追加証明書を確認できません'
+    }
+    Write-Output "CurrentUser MyへPFX証明書を追加しました: $myStoreAddedCount 件"
     $importedMatches = @($importedCertificates | Where-Object {
         $_.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() -ceq $expectedFingerprint -and $_.HasPrivateKey
       })
@@ -342,13 +404,29 @@ try {
     throw 'unsigned Windows archiveは直下一件のdirectoryでなければなりません'
   }
   $payloadPath = $payloadEntries[0].FullName
-  $signFiles = @(Get-ChildItem -LiteralPath $payloadPath -Recurse -File -Force | Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.dll', '.node') })
+  $signFiles = @(Get-PortableExecutables $payloadPath)
   if ($signFiles.Count -eq 0) {
     throw '署名対象のWindows codeがありません'
   }
   foreach ($file in $signFiles) {
     & $signTool sign /fd SHA256 /sha1 $signingThumbprint /s My /tr $timestampUrl /td SHA256 $file.FullName
     Assert-ExternalSuccess "Windows code署名に失敗しました: $($file.Name)"
+    Assert-AuthenticodeSigner $signTool $file.FullName $signingThumbprint $expectedFingerprint $displayName
+  }
+  $signedEntries = @(Get-PortableExecutables $payloadPath)
+  $expectedPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($file in $signFiles) { [void]$expectedPaths.Add($file.FullName) }
+  $actualPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($file in $signedEntries) { [void]$actualPaths.Add($file.FullName) }
+  if ($expectedPaths.Count -ne $actualPaths.Count) {
+    throw '署名前後のWindows PE対象が一致しません'
+  }
+  foreach ($path in $expectedPaths) {
+    if (-not $actualPaths.Contains($path)) {
+      throw '署名前後のWindows PE対象が一致しません'
+    }
+  }
+  foreach ($file in $signedEntries) {
     Assert-AuthenticodeSigner $signTool $file.FullName $signingThumbprint $expectedFingerprint $displayName
   }
 
@@ -424,7 +502,25 @@ try {
   $env:CSC_KEY_PASSWORD = $null
   $env:WIN_CSC_LINK = $null
   $env:WIN_CSC_KEY_PASSWORD = $null
-  if ($myStoreOpened -and $null -ne $myStore) {
+  if ($myStoreImportAttempted) {
+    try {
+      if ($myStoreOpened -and $null -ne $myStore) {
+        $myStore.Close()
+        $myStoreOpened = $false
+      }
+      $cleanupMyStore = New-Store 'My'
+      try {
+        foreach ($certificate in @($cleanupMyStore.Certificates)) {
+          $certificateKey = $certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() + '|' + [string]$certificate.HasPrivateKey
+          if (-not $myStoreBefore.Contains($certificateKey)) {
+            Remove-AddedCertificate $cleanupMyStore $certificate
+          }
+        }
+      } finally {
+        $cleanupMyStore.Close()
+      }
+    } catch { [void]$cleanupExceptions.Add($_.Exception) }
+  } elseif ($myStoreOpened -and $null -ne $myStore) {
     if ($addedToMy -and $null -ne $storeCertificate) {
       try { Remove-AddedCertificate $myStore $storeCertificate } catch { [void]$cleanupExceptions.Add($_.Exception) }
     }

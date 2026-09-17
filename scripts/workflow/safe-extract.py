@@ -60,16 +60,22 @@ def normalize_link_target(parent: tuple[str, ...], target: str) -> str:
     if "\\" in target or target.startswith("/") or re.match(r"^[A-Za-z]:", target):
         raise ExtractionError(f"symlink targetが不正です: {target!r}")
     parts = list(parent)
+    target_has_forward_component = False
     for part in target.split("/"):
         if part in ("", "."):
             continue
         if part == "..":
+            if target_has_forward_component:
+                raise ExtractionError(f"symlink targetの中間pathを解決できません: {target!r}")
             if not parts:
                 raise ExtractionError(f"symlink targetがarchive外です: {target!r}")
             parts.pop()
             continue
         parts.append(part)
-    return "/".join(parts) if parts else "."
+        target_has_forward_component = True
+    if not parts:
+        raise ExtractionError(f"symlink targetが展開rootそのものです: {target!r}")
+    return "/".join(parts)
 
 
 def assert_safe_mode(member: tarfile.TarInfo) -> None:
@@ -189,6 +195,24 @@ def create_symlink(entry: ArchiveEntry, output: Path) -> None:
         raise ExtractionError(f"symlinkの展開に失敗しました: {entry.name!r}") from error
 
 
+def validate_symlink_graph(output: Path, symlinks: list[ArchiveEntry]) -> None:
+    """展開後のsymlinkが存在するroot内の実体を指すことを検証します。"""
+    root = Path(os.path.realpath(output))
+    for entry in symlinks:
+        link_path = output.joinpath(*entry.parts)
+        try:
+            link_path.resolve(strict=True)
+            resolved = Path(os.path.realpath(link_path))
+        except (FileNotFoundError, OSError, RuntimeError) as error:
+            raise ExtractionError(f"symlink graphを安全に解決できません: {entry.name!r}") from error
+        try:
+            resolved.relative_to(root)
+        except ValueError as error:
+            raise ExtractionError(f"symlink targetが展開root外です: {entry.name!r}") from error
+        if resolved == root:
+            raise ExtractionError(f"symlink targetが展開rootそのものです: {entry.name!r}")
+
+
 def extract(archive_path: Path, output_path: Path, platform: str) -> None:
     if sys.version_info < (3, 9):
         raise ExtractionError("Python 3.9以上が必要です")
@@ -218,6 +242,7 @@ def extract(archive_path: Path, output_path: Path, platform: str) -> None:
             for entry in sorted(directories, key=lambda value: len(value.parts), reverse=True):
                 target = output_path if entry.name == "." else output_path.joinpath(*entry.parts)
                 os.chmod(target, stat.S_IMODE(entry.member.mode))
+            validate_symlink_graph(output_path, symlinks)
     except (tarfile.TarError, OSError) as error:
         raise ExtractionError("archiveの展開に失敗しました") from error
 

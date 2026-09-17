@@ -69,8 +69,12 @@ if [[ ! "$certificate_fingerprint" =~ ^[0-9A-F]{64}$ ]]; then
 fi
 
 work_directory=$(mktemp -d "${RUNNER_TEMP:-/tmp}/central-sign-macos.XXXXXX")
+umask 077
 keychain_path="$work_directory/signing.keychain-db"
 p12_path="$work_directory/certificate.p12"
+certificate_from_p12="$work_directory/p12-certificate.pem"
+private_key_from_p12="$work_directory/p12-private-key.pem"
+import_p12_path="$work_directory/import-certificate.p12"
 app_root="$work_directory/app"
 mount_point="$work_directory/dmg"
 keychain_created=false
@@ -95,7 +99,7 @@ cleanup() {
     printf '%s\n' 'macOS signing用一時directoryの削除に失敗しました' >&2
     cleanup_status=1
   fi
-  unset p12_base64 p12_password keychain_password
+  unset p12_base64
   unset MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD
   if (( status != 0 )); then
     exit "$status"
@@ -113,25 +117,31 @@ fi
 app_path=${app_entries[0]}
 
 p12_base64=${MACOS_CERTIFICATE_P12_BASE64:?MACOS_CERTIFICATE_P12_BASE64が必要です}
-p12_password=${MACOS_CERTIFICATE_PASSWORD:?MACOS_CERTIFICATE_PASSWORDが必要です}
-if [[ -z "$p12_base64" || -z "$p12_password" ]]; then
+if [[ -z "$p12_base64" || -z "${MACOS_CERTIFICATE_PASSWORD:-}" ]]; then
   printf '%s\n' 'macOS signing secretが空です' >&2
   exit 1
 fi
 
 mkdir -p -- "$mount_point"
 printf '%s' "$p12_base64" | openssl base64 -d -A >"$p12_path"
+chmod 600 "$p12_path"
 if [[ ! -s "$p12_path" ]]; then
   printf '%s\n' 'P12をdecodeできません' >&2
   exit 1
 fi
 
-certificate_from_p12="$work_directory/p12-certificate.pem"
-if ! openssl pkcs12 -in "$p12_path" -clcerts -nokeys -passin fd:3 \
-  >"$certificate_from_p12" 3<<<"$p12_password"; then
+if ! openssl pkcs12 -in "$p12_path" -clcerts -nokeys \
+  -passin env:MACOS_CERTIFICATE_PASSWORD >"$certificate_from_p12"; then
   printf '%s\n' 'P12のpasswordまたは内容が不正です' >&2
   exit 1
 fi
+if ! openssl pkcs12 -in "$p12_path" -nocerts -nodes \
+  -passin env:MACOS_CERTIFICATE_PASSWORD >"$private_key_from_p12"; then
+  printf '%s\n' 'P12のprivate keyを抽出できません' >&2
+  exit 1
+fi
+chmod 600 "$certificate_from_p12" "$private_key_from_p12"
+unset MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD p12_base64
 to_der() {
   local input_path=$1
   local output_path=$2
@@ -156,23 +166,42 @@ if [[ "$p12_subject" != "subject=CN=$display_name" ]]; then
   exit 1
 fi
 
-keychain_password=$(openssl rand -hex 24)
-security create-keychain -p "$keychain_password" "$keychain_path" >/dev/null
-keychain_created=true
-security set-keychain-settings -lut 900 "$keychain_path"
-security unlock-keychain -p "$keychain_password" "$keychain_path"
-security import "$p12_path" -k "$keychain_path" -P "$p12_password" \
-  -T /usr/bin/codesign -T /usr/bin/security >/dev/null
-identities_path="$work_directory/identities.txt"
-security find-identity -v -p codesigning "$keychain_path" >"$identities_path"
-identity_line=$(grep -F "\"$display_name\"" "$identities_path" | head -n 1 || true)
-if [[ -z "$identity_line" ]]; then
-  printf '%s\n' '署名identityのdisplayNameが一致しません' >&2
+if ! openssl pkcs12 -export -out "$import_p12_path" -inkey "$private_key_from_p12" \
+  -in "$certificate_from_p12" -passout fd:4 4<<<''; then
+  printf '%s\n' '署名用P12を一時生成できません' >&2
   exit 1
 fi
-identity_hash=$(awk '{print $2}' <<<"$identity_line")
-if [[ ! "$identity_hash" =~ ^[0-9A-Fa-f]{40}$ ]]; then
-  printf '%s\n' '署名identityのSHA-1 hashを取得できません' >&2
+chmod 600 "$import_p12_path"
+security create-keychain -p '' "$keychain_path" >/dev/null
+keychain_created=true
+security set-keychain-settings -lut 900 "$keychain_path"
+security unlock-keychain -p '' "$keychain_path"
+security import "$import_p12_path" -k "$keychain_path" -P '' \
+  -T /usr/bin/codesign -T /usr/bin/security >/dev/null
+security set-key-partition-list -S apple-tool:,apple: -s -k '' "$keychain_path" >/dev/null
+identities_path="$work_directory/identities.txt"
+security find-identity -v -p codesigning "$keychain_path" >"$identities_path"
+identity_hash_from_p12=$(openssl x509 -in "$certificate_from_p12" -fingerprint -sha1 -noout | sed 's/.*=//; s/://g' | tr '[:lower:]' '[:upper:]')
+if [[ ! "$identity_hash_from_p12" =~ ^[0-9A-F]{40}$ ]]; then
+  printf '%s\n' 'P12のSHA-1 identityを取得できません' >&2
+  exit 1
+fi
+identity_hash=''
+identity_match_count=0
+while IFS= read -r identity_line; do
+  candidate_hash=$(awk '{print $2}' <<<"$identity_line")
+  if [[ "${candidate_hash^^}" != "$identity_hash_from_p12" ]]; then
+    continue
+  fi
+  if [[ ! "$candidate_hash" =~ ^[0-9A-Fa-f]{40}$ || "$identity_line" != *"\"$display_name\""* ]]; then
+    printf '%s\n' '署名identityのSHA-1またはdisplayNameが一致しません' >&2
+    exit 1
+  fi
+  identity_hash=$candidate_hash
+  identity_match_count=$((identity_match_count + 1))
+done <"$identities_path"
+if (( identity_match_count != 1 )); then
+  printf '%s\n' '署名identityのSHA-1一致が一件ではありません' >&2
   exit 1
 fi
 export CENTRAL_SIGN_APP="$app_path"
@@ -180,6 +209,7 @@ export CENTRAL_SIGN_IDENTITY="$identity_hash"
 export CENTRAL_SIGN_KEYCHAIN="$keychain_path"
 export CENTRAL_SIGN_ENTITLEMENTS="$entitlements_path"
 export CENTRAL_SIGN_ENTITLEMENTS_INHERIT="$entitlements_inherit_path"
+export CSC_NAME="$identity_hash"
 node --input-type=module <<'NODE'
 import { sign } from "@electron/osx-sign";
 
@@ -216,13 +246,13 @@ if [[ ! -s "$designated_requirement_path" ]]; then
   exit 1
 fi
 
-(cd "$central_root" && CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec tsx src/cli.ts create-package-project \
+(cd "$central_root" && CSC_IDENTITY_AUTO_DISCOVERY=false CSC_NAME="$identity_hash" pnpm exec tsx src/cli.ts create-package-project \
   --contract "$contract_path" --target macos --output-directory "$package_project")
 if ! grep -Fq 'gatekeeperAssess: false' "$package_project/electron-builder.yml"; then
   printf '%s\n' 'macOS package projectのgatekeeperAssessが無効ではありません' >&2
   exit 1
 fi
-(cd "$central_root" && CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder \
+(cd "$central_root" && CSC_IDENTITY_AUTO_DISCOVERY=false CSC_NAME="$identity_hash" pnpm exec electron-builder \
   --projectDir "$package_project" --config "$package_project/electron-builder.yml" \
   --prepackaged "$app_path" --publish never)
 

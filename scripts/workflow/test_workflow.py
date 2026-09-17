@@ -85,6 +85,78 @@ class WorkflowFixtureTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(output.exists())
 
+    def test_mac_symlink_graph_rejects_root_cycle_and_intermediate_escape(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:
+            root = Path(directory)
+            root_link_archive = root / "root-link.tar"
+            app = tarfile.TarInfo("My.app")
+            app.type = tarfile.DIRTYPE
+            root_link = tarfile.TarInfo("My.app/foo")
+            root_link.type = tarfile.SYMTYPE
+            root_link.linkname = ".."
+            create_archive(root_link_archive, [app, root_link], {})
+            result = run_extract(root_link_archive, root / "root-link-output", "macos")
+            self.assertNotEqual(result.returncode, 0)
+
+            intermediate_archive = root / "intermediate.tar"
+            app = tarfile.TarInfo("My.app")
+            app.type = tarfile.DIRTYPE
+            intermediate = tarfile.TarInfo("My.app/link")
+            intermediate.type = tarfile.SYMTYPE
+            intermediate.linkname = "foo/../signing.keychain-db"
+            create_archive(intermediate_archive, [app, intermediate], {})
+            result = run_extract(intermediate_archive, root / "intermediate-output", "macos")
+            self.assertNotEqual(result.returncode, 0)
+
+            cycle_archive = root / "cycle.tar"
+            app = tarfile.TarInfo("My.app")
+            app.type = tarfile.DIRTYPE
+            first = tarfile.TarInfo("My.app/first")
+            first.type = tarfile.SYMTYPE
+            first.linkname = "second"
+            second = tarfile.TarInfo("My.app/second")
+            second.type = tarfile.SYMTYPE
+            second.linkname = "first"
+            create_archive(cycle_archive, [app, first, second], {})
+            result = run_extract(cycle_archive, root / "cycle-output", "macos")
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_mac_electron_framework_relative_symlinks_are_allowed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:
+            root = Path(directory)
+            archive = root / "framework.tar"
+            directories: list[tarfile.TarInfo] = []
+            for name in (
+                "My.app",
+                "My.app/Contents",
+                "My.app/Contents/Frameworks",
+                "My.app/Contents/Frameworks/Electron Framework.framework",
+                "My.app/Contents/Frameworks/Electron Framework.framework/Versions",
+                "My.app/Contents/Frameworks/Electron Framework.framework/Versions/A",
+            ):
+                member = tarfile.TarInfo(name)
+                member.type = tarfile.DIRTYPE
+                member.mode = 0o755
+                directories.append(member)
+            current = tarfile.TarInfo(
+                "My.app/Contents/Frameworks/Electron Framework.framework/Versions/Current"
+            )
+            current.type = tarfile.SYMTYPE
+            current.linkname = "A"
+            framework = tarfile.TarInfo(
+                "My.app/Contents/Frameworks/Electron Framework.framework/Electron Framework"
+            )
+            framework.type = tarfile.SYMTYPE
+            framework.linkname = "Versions/Current/Electron Framework"
+            binary = tarfile.TarInfo(
+                "My.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework"
+            )
+            create_archive(archive, [*directories, binary, current, framework], {binary.name: b"framework"})
+            output = root / "output"
+            result = run_extract(archive, output, "macos")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((output / framework.name).read_bytes(), b"framework")
+
     def test_hardlink_fifo_and_path_traversal_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:
             root = Path(directory)
@@ -158,6 +230,22 @@ class WorkflowFixtureTest(unittest.TestCase):
                 json.loads(result.stdout),
                 {"draft": "false", "prerelease": "false", "immutable": "false"},
             )
+
+    def test_release_immutable_missing_or_null_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:
+            for index, value in enumerate((
+                {"draft": False, "prerelease": False},
+                {"draft": False, "prerelease": False, "immutable": None},
+            )):
+                release = Path(directory) / f"release-{index}.json"
+                release.write_text(json.dumps(value), encoding="utf-8")
+                result = subprocess.run(
+                    [str(RELEASE_STATE), str(release)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,16 @@ token=${CENTRAL_APP_TOKEN:?CENTRAL_APP_TOKENが必要です}
 repository=${CENTRAL_SOURCE_REPOSITORY:?CENTRAL_SOURCE_REPOSITORYが必要です}
 tag=${CENTRAL_SOURCE_TAG:?CENTRAL_SOURCE_TAGが必要です}
 output_path=${CENTRAL_TAG_OUTPUT:?CENTRAL_TAG_OUTPUTが必要です}
+curl_max_seconds=${CENTRAL_CURL_MAX_SECONDS:?CENTRAL_CURL_MAX_SECONDSが必要です}
+deadline_epoch=${CENTRAL_DEADLINE_EPOCH:-}
+if [[ ! "$curl_max_seconds" =~ ^[1-9][0-9]*$ ]]; then
+  printf '%s\n' 'curl最大時間が不正です' >&2
+  exit 1
+fi
+if [[ -n "$deadline_epoch" && ! "$deadline_epoch" =~ ^[1-9][0-9]*$ ]]; then
+  printf '%s\n' 'tag解決のdeadlineが不正です' >&2
+  exit 1
+fi
 
 if [[ "$repository" == *$'\n'* || "$repository" == *$'\r'* || "$tag" == *$'\n'* || "$tag" == *$'\r'* ]]; then
   printf '%s\n' 'repositoryまたはtagにtransport上の改行があります' >&2
@@ -55,8 +65,13 @@ api_get() {
   local response_code
   local curl_status
   for attempt in 1 2 3; do
+    if [[ -n "$deadline_epoch" ]] && (( $(date +%s) + curl_max_seconds >= deadline_epoch )); then
+      printf '%s\n' 'tag解決の時間予算が不足しています' >&2
+      return 1
+    fi
     curl_status=0
-    response_code=$(curl --silent --show-error --location \
+    response_code=$(curl --silent --show-error \
+      --connect-timeout "$curl_max_seconds" --max-time "$curl_max_seconds" \
       --header 'Accept: application/vnd.github+json' \
       --header 'X-GitHub-Api-Version: 2022-11-28' \
       --header "@$auth_header_path" \
@@ -67,8 +82,16 @@ api_get() {
     if (( curl_status != 0 )); then
       response_code=000
     fi
+    if [[ "$response_code" == 401 ]]; then
+      printf 'GitHub API tokenが期限切れまたは権限不正です: %s\n' "$path" >&2
+      return 1
+    fi
     if [[ "$response_code" != 000 && ! "$response_code" =~ ^429$ && ! "$response_code" =~ ^5[0-9][0-9]$ ]] || (( attempt == 3 )); then
       printf 'GitHub APIの取得に失敗しました: %s HTTP %s\n' "$path" "$response_code" >&2
+      return 1
+    fi
+    if [[ -n "$deadline_epoch" ]] && (( $(date +%s) + attempt >= deadline_epoch )); then
+      printf '%s\n' 'tag解決のretry時間予算が不足しています' >&2
       return 1
     fi
     sleep "$attempt"
