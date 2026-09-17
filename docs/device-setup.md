@@ -11,8 +11,15 @@ Windows の証明書画面に出る SHA-1 の thumbprint と SHA-256 fingerprint
 
 ## macOS
 
+公開証明書 `certificate.cer` の SHA-256 fingerprint は、ターミナルで次のように表示できます。
+出力値を信頼できる経路の値と照合してから、以下へ進みます。
+
+```sh
+openssl x509 -inform DER -in certificate.cer -noout -fingerprint -sha256
+```
+
 1. 公開証明書の fingerprint、有効期限、発行先を確認します。
-2. キーチェーンアクセスで公開証明書を取り込み、対象の証明書であることをもう一度確認します。証明書を信頼する操作を求められた場合は、対象の証明書と用途を確認して本人が判断します。
+2. キーチェーンアクセスを開き、ファイルメニューから `certificate.cer` を読み込みます。取り込んだ証明書を開き、対象の証明書であることをもう一度確認します。証明書を信頼する操作を求められた場合は、対象の証明書と用途を確認して本人が判断します。
 3. ブラウザーで対象 Release の DMG をダウンロードします。quarantine 属性を残したまま開き、アプリを Applications へ移します。
 4. アプリを起動します。自己署名だけでは Gatekeeper の標準許可にならないため、警告が出る場合があります。
 5. 配布元と署名を確認したうえで利用する場合は、macOS が提供する個別アプリの許可操作を行います。操作場所は macOS のバージョンにより異なり、システム設定の「プライバシーとセキュリティ」で案内されることがあります。
@@ -27,6 +34,12 @@ quarantine 属性を削除して検証を省略したり、Gatekeeper 全体を�
 構文が正しいプロファイルを作成できても、OS がそのルールを採用することの証明にはなりません。
 
 ## Windows
+
+公開証明書 `certificate.cer` は DER 形式なので、PowerShell で計算したファイルの SHA-256 が中央設定の fingerprint に対応します。
+
+```powershell
+Get-FileHash -LiteralPath .\certificate.cer -Algorithm SHA256
+```
 
 1. 公開証明書の fingerprint、有効期限、発行先を確認します。
 2. `scripts/certificates/install-windows-trust.ps1` を使い、公開証明書を Root と TrustedPublisher へ登録します。`-CertificatePath` に `certificate.cer`、`-Scope` に `CurrentUser` または `LocalMachine`、`-Fingerprint` に確認済みの SHA-1 fingerprint を指定します。
@@ -43,7 +56,7 @@ quarantine 属性を削除して検証を省略したり、Gatekeeper 全体を�
 Root と TrustedPublisher への登録は Authenticode の信頼を設定するためのものです。
 SmartScreen の評価とは別のため、登録後も警告が残ることがあります。
 Smart App Control が強制されている端末では、この自己署名方式は対象外です。
-導入のために Smart App Control や Windows の保護設定全体を無効化しないでください。
+導入のために SmartScreen、Smart App Control、Windows の保護設定全体を無効化しないでください。
 
 PowerShell の `Unblock-File` やファイルのプロパティでブロックを解除してから試すと、ブラウザーで取得した初回導入の検証になりません。
 まず Mark of the Web を保持した状態で結果を記録します。
