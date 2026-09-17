@@ -124,8 +124,12 @@ function assertBuildScripts(
   }
   const requiredScripts = [application.buildScripts.macos, application.buildScripts.windows];
   for (const scriptName of requiredScripts) {
-    if (scripts[scriptName] === undefined) {
+    const script = scripts[scriptName];
+    if (script === undefined) {
       throw new Error(`package.jsonにbuild scriptがありません: ${scriptName}`);
+    }
+    if (script.trim().length === 0) {
+      throw new Error(`package.jsonのbuild scriptが空です: ${scriptName}`);
     }
   }
 }

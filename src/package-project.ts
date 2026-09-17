@@ -45,17 +45,21 @@ function repositoryParts(contract: ReleaseContract): { owner: string; repo: stri
   return { owner, repo };
 }
 
-function commonBuilderConfig(contract: ReleaseContract): Record<string, unknown> {
+function githubPublishConfiguration(contract: ReleaseContract): Record<string, unknown> {
   const { owner, repo } = repositoryParts(contract);
+  return {
+    provider: "github",
+    owner,
+    repo,
+    channel: contract.application.release.channel
+  };
+}
+
+function commonBuilderConfig(contract: ReleaseContract): Record<string, unknown> {
   return {
     appId: contract.application.identity.appId,
     productName: contract.application.identity.productName,
-    publish: {
-      provider: "github",
-      owner,
-      repo,
-      channel: contract.application.release.channel
-    }
+    publish: githubPublishConfiguration(contract)
   };
 }
 
@@ -112,7 +116,11 @@ function builderConfig(
     win: windows,
     nsisWeb: {
       guid: contract.application.windows.guid,
-      artifactName: `${artifactName}-WebSetup-\${version}.\${ext}`
+      artifactName: `${artifactName}-WebSetup-\${version}.\${ext}`,
+      publish: {
+        ...githubPublishConfiguration(contract),
+        publishAutoUpdate: false
+      }
     }
   };
 }

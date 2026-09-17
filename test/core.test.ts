@@ -126,6 +126,24 @@ function writeSourcePackage(
   );
 }
 
+function writeSourcePackageWithScripts(
+  rootDirectory: string,
+  macosScript: string,
+  windowsScript: string
+): void {
+  writeFileSync(
+    join(rootDirectory, "package.json"),
+    JSON.stringify({
+      name: "demo",
+      version: "1.2.3",
+      packageManager: "pnpm@10.30.2",
+      scripts: { "build:macos": macosScript, "build:windows": windowsScript },
+      dependencies: { "electron-updater": "6.8.9" },
+      devDependencies: { "electron-builder": "26.16.1" }
+    })
+  );
+}
+
 function sha512(value: string): string {
   return createHash("sha512").update(value).digest("base64");
 }
@@ -342,6 +360,17 @@ describe("source validation", () => {
     expect(() => validateSource(root, contract, root)).toThrow();
   });
 
+  it("allowlist build scriptの空文字と空白だけの値を拒否する", () => {
+    const root = temporaryDirectory();
+    writeConfiguration(root, validApplication());
+    writeSource(root, undefined);
+    const contract = prepareContract(root, "demo-app", "v1.2.3", false);
+    writeSourcePackageWithScripts(root, "", "build");
+    expect(() => validateSource(root, contract, root)).toThrow(/build script/);
+    writeSourcePackageWithScripts(root, "build", " \t ");
+    expect(() => validateSource(root, contract, root)).toThrow(/build script/);
+  });
+
   it("contractの改ざんを後続commandで拒否する", () => {
     const root = temporaryDirectory();
     writeConfiguration(root, validApplication());
@@ -462,6 +491,8 @@ describe("manifest and publish plan", () => {
     expect(webConfig).not.toContain("target: nsis\n");
     expect(nsisConfig).toContain("artifactName: demo-Setup-");
     expect(nsisConfig).not.toContain("${productName} Setup");
+    expect(webConfig).toContain("publishAutoUpdate: false");
+    expect(nsisConfig).not.toContain("publishAutoUpdate");
     const realParent = join(root, "project-parent");
     mkdirSync(realParent);
     const parentLink = join(root, "project-parent-link");
