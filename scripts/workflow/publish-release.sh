@@ -14,15 +14,9 @@ build_manifest_path=$5
 assets_archive=$6
 api_url=${GITHUB_API_URL:-https://api.github.com}
 upload_api_url=${GITHUB_UPLOAD_URL:-https://uploads.github.com}
-token_file=${CENTRAL_APP_TOKEN_FILE:?CENTRAL_APP_TOKEN_FILEが必要です}
-
-if [[ ! -f "$token_file" || -L "$token_file" ]]; then
-  printf '%s\n' 'GitHub App token fileが不正です' >&2
-  exit 1
-fi
-token=$(<"$token_file")
-if [[ -z "$token" ]]; then
-  printf '%s\n' 'GitHub App tokenが空です' >&2
+token=${CENTRAL_APP_TOKEN:?CENTRAL_APP_TOKENが必要です}
+if [[ -z "$token" || "$token" == *$'\n'* || "$token" == *$'\r'* ]]; then
+  printf '%s\n' 'GitHub App tokenが空またはtransport上不正です' >&2
   exit 1
 fi
 for input_path in "$central_root" "$contract_path" "$manifest_path" "$source_manifest_path" "$build_manifest_path" "$assets_archive"; do
@@ -55,6 +49,9 @@ jq -e --arg repository "$repository" --arg tag "$tag" --arg source_sha "$source_
   "$build_manifest_path" >/dev/null
 
 work_directory=$(mktemp -d "${RUNNER_TEMP:-/tmp}/central-publish-release.XXXXXX")
+auth_header_path="$work_directory/authorization-header.txt"
+umask 077
+printf 'Authorization: Bearer %s\n' "$token" >"$auth_header_path"
 remote_assets_path="$work_directory/remote-assets.json"
 release_path="$work_directory/release.json"
 plan_path="$work_directory/publish-plan.json"
@@ -73,9 +70,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+urlencode() {
+  jq -nr --arg value "$1" '$value | @uri'
+}
+
+repository_owner=${repository%%/*}
+repository_name=${repository#*/}
+if [[ "$repository_owner" == "$repository" || -z "$repository_owner" || -z "$repository_name" ]]; then
+  printf '%s\n' 'repositoryをAPI pathへ変換できません' >&2
+  exit 1
+fi
+encoded_repository="$(urlencode "$repository_owner")/$(urlencode "$repository_name")"
+
 resolved_tag_path="$work_directory/resolved-tag.json"
 CENTRAL_SOURCE_REPOSITORY="$repository" \
   CENTRAL_SOURCE_TAG="$tag" \
+  CENTRAL_APP_TOKEN="$token" \
   CENTRAL_TAG_OUTPUT="$resolved_tag_path" \
   "$central_root/scripts/workflow/resolve-tag.sh"
 resolved_source_sha=$(jq -er '.sourceSha' "$resolved_tag_path")
@@ -83,10 +93,6 @@ if [[ "${resolved_source_sha,,}" != "${source_sha,,}" ]]; then
   printf 'tagのsource SHAがmanifestと一致しません: %s\n' "$resolved_source_sha" >&2
   exit 1
 fi
-
-urlencode() {
-  jq -nr --arg value "$1" '$value | @uri'
-}
 
 request_once() {
   local method=$1
@@ -100,14 +106,14 @@ request_once() {
     response_code=$(curl --silent --show-error --location --request "$method" \
       --header 'Accept: application/vnd.github+json' \
       --header 'X-GitHub-Api-Version: 2022-11-28' \
-      --header "Authorization: Bearer $token" \
+      --header "@$auth_header_path" \
       --header "$content_type" --data-binary "@$body_path" \
       --output "$output_path" --write-out '%{http_code}' "$url") || curl_status=$?
   else
     response_code=$(curl --silent --show-error --location --request "$method" \
       --header 'Accept: application/vnd.github+json' \
       --header 'X-GitHub-Api-Version: 2022-11-28' \
-      --header "Authorization: Bearer $token" \
+      --header "@$auth_header_path" \
       --output "$output_path" --write-out '%{http_code}' "$url") || curl_status=$?
   fi
   if (( curl_status != 0 )); then
@@ -141,6 +147,55 @@ request_read() {
   return 1
 }
 
+request_download_once() {
+  local url=$1
+  local output_path=$2
+  local response_code
+  local curl_status=0
+  response_code=$(curl --silent --show-error --location \
+    --header 'Accept: application/octet-stream' \
+    --header 'X-GitHub-Api-Version: 2022-11-28' \
+    --header "@$auth_header_path" \
+    --output "$output_path" --write-out '%{http_code}' "$url") || curl_status=$?
+  if (( curl_status != 0 )); then
+    HTTP_STATUS=000
+  elif [[ "$response_code" =~ ^[0-9]{3}$ ]]; then
+    HTTP_STATUS=$response_code
+  else
+    HTTP_STATUS=000
+  fi
+}
+
+download_remote_asset() {
+  local asset_id=$1
+  local asset_name=$2
+  local expected_digest=$3
+  local expected_size=$4
+  local output_path=$5
+  local attempt
+  for attempt in 1 2 3; do
+    rm -f -- "$output_path"
+    request_download_once "$api_url/repos/$encoded_repository/releases/assets/$asset_id" "$output_path"
+    if [[ "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
+      local actual_size
+      local actual_digest
+      actual_size=$(wc -c <"$output_path" | tr -d '[:space:]')
+      actual_digest="sha256:$(sha256sum "$output_path" | awk '{print tolower($1)}')"
+      if [[ "$actual_size" == "$expected_size" && "$actual_digest" == "${expected_digest,,}" ]]; then
+        return 0
+      fi
+      printf 'remote assetのbytes digestが一致しません: %s\n' "$asset_name" >&2
+      return 1
+    fi
+    if ! is_retryable_status "$HTTP_STATUS" || (( attempt == 3 )); then
+      printf 'remote assetのdownloadに失敗しました: %s HTTP %s\n' "$asset_name" "$HTTP_STATUS" >&2
+      return 1
+    fi
+    sleep "$attempt"
+  done
+  return 1
+}
+
 fetch_remote_assets() {
   local accumulator="$work_directory/remote-accumulator.json"
   local page_path="$work_directory/remote-page.json"
@@ -148,14 +203,25 @@ fetch_remote_assets() {
   local page_count
   printf '[]\n' >"$accumulator"
   while :; do
-    if ! request_read GET "$api_url/repos/$repository/releases/$release_id/assets?per_page=100&page=$page" "$page_path"; then
+    if ! request_read GET "$api_url/repos/$encoded_repository/releases/$release_id/assets?per_page=100&page=$page" "$page_path"; then
       printf 'Release asset一覧の取得に失敗しました: HTTP %s\n' "$HTTP_STATUS" >&2
       return 1
     fi
-    jq -e 'type == "array"' "$page_path" >/dev/null
-    page_count=$(jq -er 'length' "$page_path")
-    jq -s '.[0] + .[1]' "$accumulator" "$page_path" >"$work_directory/remote-next.json"
-    mv -- "$work_directory/remote-next.json" "$accumulator"
+    if ! jq -e 'type == "array"' "$page_path" >/dev/null; then
+      printf '%s\n' 'Release asset一覧のJSONが配列ではありません' >&2
+      return 1
+    fi
+    if ! page_count=$(jq -er 'length' "$page_path"); then
+      printf '%s\n' 'Release asset一覧の件数を取得できません' >&2
+      return 1
+    fi
+    if ! jq -s '.[0] + .[1]' "$accumulator" "$page_path" >"$work_directory/remote-next.json"; then
+      printf '%s\n' 'Release asset一覧を結合できません' >&2
+      return 1
+    fi
+    if ! mv -- "$work_directory/remote-next.json" "$accumulator"; then
+      return 1
+    fi
     if (( page_count < 100 )); then
       break
     fi
@@ -165,7 +231,9 @@ fetch_remote_assets() {
       return 1
     fi
   done
-  cp -- "$accumulator" "$remote_assets_path"
+  if ! cp -- "$accumulator" "$remote_assets_path"; then
+    return 1
+  fi
 }
 
 remote_asset_id() {
@@ -193,7 +261,7 @@ delete_asset() {
   local attempt
   local response_path="$work_directory/delete-response.json"
   for attempt in 1 2 3; do
-    request_once DELETE "$api_url/repos/$repository/releases/assets/$asset_id" "$response_path" '' ''
+    request_once DELETE "$api_url/repos/$encoded_repository/releases/assets/$asset_id" "$response_path" '' ''
     if [[ "$HTTP_STATUS" == 204 ]]; then
       return 0
     fi
@@ -222,7 +290,7 @@ upload_asset() {
   local response_path="$work_directory/upload-response.json"
   encoded_name=$(urlencode "$asset_name")
   for attempt in 1 2 3; do
-    request_once POST "$upload_api_url/repos/$repository/releases/$release_id/assets?name=$encoded_name" \
+    request_once POST "$upload_api_url/repos/$encoded_repository/releases/$release_id/assets?name=$encoded_name" \
       "$response_path" "$asset_path" 'Content-Type: application/octet-stream'
     if [[ "$HTTP_STATUS" == 201 ]]; then
       return 0
@@ -243,15 +311,16 @@ upload_asset() {
 }
 
 encoded_tag=$(urlencode "$tag")
-if ! request_read GET "$api_url/repos/$repository/releases/tags/$encoded_tag" "$release_path"; then
+if ! request_read GET "$api_url/repos/$encoded_repository/releases/tags/$encoded_tag" "$release_path"; then
   printf '対象Releaseの取得に失敗しました: HTTP %s\n' "$HTTP_STATUS" >&2
   exit 1
 fi
-release_id=$(jq -er '.id | numbers' "$release_path")
+release_id=$(jq -er '.id | numbers | select(. > 0)' "$release_path")
 release_tag=$(jq -er '.tag_name' "$release_path")
-draft=$(jq -er '.draft | booleans' "$release_path")
-prerelease=$(jq -er '.prerelease | booleans' "$release_path")
-immutable=$(jq -er '.immutable // false | booleans' "$release_path")
+release_state=$(bash "$central_root/scripts/workflow/read-release-state.sh" "$release_path")
+draft=$(jq -r '.draft' <<<"$release_state")
+prerelease=$(jq -r '.prerelease' <<<"$release_state")
+immutable=$(jq -r '.immutable' <<<"$release_state")
 channel=$(jq -er '.application.release.channel' "$contract_path")
 if [[ "$release_tag" != "$tag" || "$draft" != false ]]; then
   printf '%s\n' '対象Releaseのtagまたはdraft状態が不正です' >&2
@@ -276,7 +345,7 @@ case "$channel" in
     ;;
 esac
 
-"$central_root/scripts/workflow/extract-archive.sh" "$assets_archive" "$extracted_assets"
+"$central_root/scripts/workflow/extract-archive.sh" "$assets_archive" "$extracted_assets" linux
 assets_directory=$extracted_assets
 if [[ -n "$(find "$assets_directory" -mindepth 1 -maxdepth 1 \( ! -type f -o -type l \) -print -quit)" ]]; then
   printf '%s\n' 'publish assetにregular file以外が含まれています' >&2
@@ -286,7 +355,7 @@ fi
 if ! fetch_remote_assets; then
   exit 1
 fi
-(cd "$central_root" && pnpm exec tsx src/cli.ts plan-publish \
+(cd "$central_root" && env -u CENTRAL_APP_TOKEN pnpm exec tsx src/cli.ts plan-publish \
   --contract "$contract_path" --manifest "$manifest_path" \
   --remote-assets "$remote_assets_path" --assets-directory "$assets_directory" --output "$plan_path")
 
@@ -298,6 +367,99 @@ jq -e --arg repository "$repository" --arg tag "$tag" \
   '.schemaVersion == 1 and .repository == $repository and .tag == $tag and .publishOrder == ["payload", "metadata"]' \
   "$plan_path" >/dev/null
 
+backup_directory="$work_directory/backups"
+mkdir -p -- "$backup_directory"
+declare -a backup_names=()
+declare -a backup_digests=()
+declare -a backup_sizes=()
+declare -a backup_new_digests=()
+declare -a backup_new_sizes=()
+declare -a backup_paths=()
+
+prepare_backups() {
+  local operation_json
+  local action
+  local name
+  local record
+  local asset_id
+  local digest
+  local size
+  local new_digest
+  local new_size
+  local backup_path
+  local index=0
+  while IFS= read -r operation_json; do
+    [[ -z "$operation_json" ]] && continue
+    if ! action=$(jq -er '.action' <<<"$operation_json"); then
+      printf '%s\n' 'publish planのactionを解析できません' >&2
+      return 1
+    fi
+    if [[ "$action" != replace && "$action" != update-metadata ]]; then
+      continue
+    fi
+    if ! name=$(jq -er '.name' <<<"$operation_json") || ! new_digest=$(jq -er '.digest | ascii_downcase' <<<"$operation_json") || ! new_size=$(jq -er '.size | numbers' <<<"$operation_json"); then
+      printf '%s\n' 'publish planの置換対象を解析できません' >&2
+      return 1
+    fi
+    record=$(jq -c --arg name "$name" '[.[] | select(.name == $name)] | if length == 1 then .[0] else empty end' "$remote_assets_path")
+    if [[ -z "$record" ]]; then
+      printf 'backup対象のremote assetが一意ではありません: %s\n' "$name" >&2
+      return 1
+    fi
+    if ! asset_id=$(jq -er '.id | numbers' <<<"$record") || ! digest=$(jq -er '.digest | strings | ascii_downcase' <<<"$record") || ! size=$(jq -er '.size | numbers' <<<"$record"); then
+      printf 'backup対象のremote asset metadataが不正です: %s\n' "$name" >&2
+      return 1
+    fi
+    backup_path="$backup_directory/$index.asset"
+    if ! download_remote_asset "$asset_id" "$name" "$digest" "$size" "$backup_path"; then
+      return 1
+    fi
+    backup_names[index]="$name"
+    backup_digests[index]="$digest"
+    backup_sizes[index]="$size"
+    backup_new_digests[index]="$new_digest"
+    backup_new_sizes[index]="$new_size"
+    backup_paths[index]="$backup_path"
+    index=$((index + 1))
+  done < <(jq -c '.operations[]' "$plan_path")
+}
+
+if ! prepare_backups; then
+  printf '%s\n' '置換対象assetのbackupを作成できません' >&2
+  exit 1
+fi
+
+declare -A metadata_removed=()
+remove_old_metadata() {
+  local operation_json
+  local action
+  local name
+  local role
+  local asset_id
+  while IFS= read -r operation_json; do
+    [[ -z "$operation_json" ]] && continue
+    action=$(jq -er '.action' <<<"$operation_json")
+    role=$(jq -er '.role' <<<"$operation_json")
+    if [[ "$action" == skip || ( "$role" != macos-metadata && "$role" != windows-metadata ) ]]; then
+      continue
+    fi
+    name=$(jq -er '.name' <<<"$operation_json")
+    asset_id=$(remote_asset_id "$name")
+    if [[ -z "$asset_id" ]]; then
+      printf 'metadata置換対象のremote assetがありません: %s\n' "$name" >&2
+      return 1
+    fi
+    if ! delete_asset "$asset_id" "$name"; then
+      return 1
+    fi
+    metadata_removed["$name"]=1
+    if ! fetch_remote_assets; then
+      return 1
+    fi
+  done < <(jq -c '.operations[] | select(.action != "skip" and (.role == "macos-metadata" or .role == "windows-metadata"))' "$plan_path")
+}
+
+operation_error=''
 publish_operation() {
   local operation_json=$1
   local action
@@ -307,64 +469,195 @@ publish_operation() {
   local role
   local asset_path
   local asset_id
-  action=$(jq -er '.action' <<<"$operation_json")
-  name=$(jq -er '.name' <<<"$operation_json")
-  digest=$(jq -er '.digest' <<<"$operation_json" | tr '[:upper:]' '[:lower:]')
-  size=$(jq -er '.size' <<<"$operation_json")
-  role=$(jq -er '.role' <<<"$operation_json")
-  if [[ "$name" == */* || "$name" == *..* || "$name" == *$'\\n'* || "$name" == *$'\\r'* ]]; then
-    printf 'asset filenameが不正です: %s\n' "$name" >&2
+  if ! action=$(jq -er '.action' <<<"$operation_json") || ! name=$(jq -er '.name' <<<"$operation_json") || ! digest=$(jq -er '.digest | ascii_downcase' <<<"$operation_json") || ! size=$(jq -er '.size | numbers' <<<"$operation_json") || ! role=$(jq -er '.role' <<<"$operation_json"); then
+    operation_error='publish planのoperationを解析できません'
+    return 1
+  fi
+  if [[ "$name" == *$'\n'* || "$name" == *$'\r'* || "$name" == *$'\0'* ]]; then
+    operation_error="asset filenameにtransport上の制御文字があります: $name"
     return 1
   fi
   asset_path="$assets_directory/$name"
   if [[ "$action" != skip && ( ! -f "$asset_path" || -L "$asset_path" ) ]]; then
-    printf 'publish assetがありません: %s\n' "$name" >&2
+    operation_error="publish assetがありません: $name"
     return 1
   fi
   case "$action" in
     skip)
       ;;
     upload)
-      upload_asset "$name" "$digest" "$size" "$asset_path"
-      ;;
-    replace|update-metadata)
-      asset_id=$(remote_asset_id "$name")
-      if [[ -z "$asset_id" ]]; then
-        printf '置換対象のremote assetがありません: %s\n' "$name" >&2
+      if ! upload_asset "$name" "$digest" "$size" "$asset_path"; then
+        operation_error="asset uploadに失敗しました: $name"
         return 1
       fi
-      delete_asset "$asset_id" "$name"
-      upload_asset "$name" "$digest" "$size" "$asset_path"
+      ;;
+    replace|update-metadata)
+      if [[ -n "${metadata_removed[$name]+present}" ]]; then
+        asset_id=''
+      else
+        asset_id=$(remote_asset_id "$name")
+        if [[ -z "$asset_id" ]]; then
+          operation_error="置換対象のremote assetがありません: $name"
+          return 1
+        fi
+        if ! delete_asset "$asset_id" "$name"; then
+          operation_error="asset削除に失敗しました: $name"
+          return 1
+        fi
+      fi
+      if ! upload_asset "$name" "$digest" "$size" "$asset_path"; then
+        operation_error="asset uploadに失敗しました: $name"
+        return 1
+      fi
       ;;
     *)
-      printf 'publish planのactionが不正です: %s\n' "$action" >&2
+      operation_error="publish planのactionが不正です: $action"
       return 1
       ;;
   esac
   printf '公開処理: %s %s\n' "$role" "$name"
-  fetch_remote_assets
+  if ! fetch_remote_assets; then
+    operation_error="公開後のremote asset取得に失敗しました: $name"
+    return 1
+  fi
 }
 
-for phase in payload metadata; do
-  while IFS= read -r operation_json; do
-    publish_operation "$operation_json"
-  done < <(jq -c --arg phase "$phase" \
-    '.operations[] | select((($phase == "metadata") and (.role == "macos-metadata" or .role == "windows-metadata")) or (($phase == "payload") and (.role != "macos-metadata" and .role != "windows-metadata")))' \
-    "$plan_path")
-done
+publish_plan() {
+  local phase
+  local operation_json
+  for phase in payload metadata; do
+    while IFS= read -r operation_json; do
+      [[ -z "$operation_json" ]] && continue
+      if ! publish_operation "$operation_json"; then
+        return 1
+      fi
+    done < <(jq -c --arg phase "$phase" \
+      '.operations[] | select((($phase == "metadata") and (.role == "macos-metadata" or .role == "windows-metadata")) or (($phase == "payload") and (.role != "macos-metadata" and .role != "windows-metadata")))' \
+      "$plan_path")
+  done
+}
 
-fetch_remote_assets
-while IFS=$'\t' read -r asset_name asset_size asset_digest; do
-  if [[ -z "$asset_name" || -z "$asset_digest" ]]; then
-    printf '%s\n' 'manifest assetの再検証入力が空です' >&2
-    exit 1
+rollback_error=''
+append_rollback_error() {
+  local message=$1
+  if [[ -z "$rollback_error" ]]; then
+    rollback_error=$message
+  else
+    rollback_error+="; $message"
   fi
-  if ! jq -e --arg name "$asset_name" --arg digest "$asset_digest" --argjson size "$asset_size" \
-    'any(.[]; .name == $name and .size == $size and (.digest | ascii_downcase) == $digest)' "$remote_assets_path" >/dev/null; then
-    printf '公開後のasset digest検証に失敗しました: %s\n' "$asset_name" >&2
-    exit 1
+}
+
+rollback_backups() {
+  local index
+  local name
+  local old_digest
+  local old_size
+  local new_digest
+  local new_size
+  local backup_path
+  local current_record
+  local current_count
+  local current_digest
+  local current_size
+  local current_id
+  rollback_error=''
+  if ! fetch_remote_assets; then
+    append_rollback_error 'rollback前のremote asset取得に失敗しました'
+    return 1
   fi
-done < <(jq -r '.assets[] | [.name, (.size | tostring), (.digest | ascii_downcase)] | @tsv' "$manifest_path")
+  for ((index = 0; index < ${#backup_names[@]}; index++)); do
+    name=${backup_names[index]}
+    old_digest=${backup_digests[index]}
+    old_size=${backup_sizes[index]}
+    new_digest=${backup_new_digests[index]}
+    new_size=${backup_new_sizes[index]}
+    backup_path=${backup_paths[index]}
+    current_count=$(jq --arg name "$name" '[.[] | select(.name == $name)] | length' "$remote_assets_path")
+    if [[ "$current_count" -gt 1 ]]; then
+      append_rollback_error "rollback対象assetが重複しています: $name"
+      continue
+    fi
+    if [[ "$current_count" == 1 ]]; then
+      current_record=$(jq -c --arg name "$name" '[.[] | select(.name == $name)][0]' "$remote_assets_path")
+      current_digest=$(jq -er '.digest | ascii_downcase' <<<"$current_record")
+      current_size=$(jq -er '.size | numbers' <<<"$current_record")
+      if [[ "$current_digest" == "$old_digest" && "$current_size" == "$old_size" ]]; then
+        continue
+      fi
+      if [[ "$current_digest" != "$new_digest" || "$current_size" != "$new_size" ]]; then
+        append_rollback_error "競合のためassetを安全に復元できません: $name"
+        continue
+      fi
+      current_id=$(jq -er '.id | numbers' <<<"$current_record")
+      if ! delete_asset "$current_id" "$name"; then
+        append_rollback_error "復元前の新asset削除に失敗しました: $name"
+        continue
+      fi
+      if ! fetch_remote_assets; then
+        append_rollback_error "新asset削除後のremote asset取得に失敗しました: $name"
+        continue
+      fi
+    fi
+    if ! upload_asset "$name" "$old_digest" "$old_size" "$backup_path"; then
+      append_rollback_error "旧assetの復元uploadに失敗しました: $name"
+      continue
+    fi
+    if ! fetch_remote_assets || ! remote_has_digest "$name" "$old_digest" "$old_size"; then
+      append_rollback_error "旧assetの復元digest検証に失敗しました: $name"
+    fi
+  done
+  [[ -z "$rollback_error" ]]
+}
+
+if ! remove_old_metadata; then
+  original_error='旧metadataの削除に失敗しました'
+  if rollback_backups; then
+    printf '%s\n' "$original_error" >&2
+  else
+    printf '%s。rollbackにも失敗しました: %s\n' "$original_error" "$rollback_error" >&2
+  fi
+  exit 1
+fi
+
+if ! publish_plan; then
+  original_error=${operation_error:-'publish操作に失敗しました'}
+  if rollback_backups; then
+    printf '%s\n' "$original_error" >&2
+  else
+    printf '%s。rollbackにも失敗しました: %s\n' "$original_error" "$rollback_error" >&2
+  fi
+  exit 1
+fi
+
+verify_published_assets() {
+  local asset_name
+  local asset_size
+  local asset_digest
+  if ! fetch_remote_assets; then
+    return 1
+  fi
+  while IFS=$'\t' read -r asset_name asset_size asset_digest; do
+    if [[ -z "$asset_name" || -z "$asset_digest" ]]; then
+      printf '%s\n' 'manifest assetの再検証入力が空です' >&2
+      return 1
+    fi
+    if ! jq -e --arg name "$asset_name" --arg digest "$asset_digest" --argjson size "$asset_size" \
+      'any(.[]; .name == $name and .size == $size and (.digest | ascii_downcase) == $digest)' "$remote_assets_path" >/dev/null; then
+      printf '公開後のasset digest検証に失敗しました: %s\n' "$asset_name" >&2
+      return 1
+    fi
+  done < <(jq -r '.assets[] | [.name, (.size | tostring), (.digest | ascii_downcase)] | @tsv' "$manifest_path")
+}
+
+if ! verify_published_assets; then
+  original_error='公開後のasset digest検証に失敗しました'
+  if rollback_backups; then
+    printf '%s\n' "$original_error" >&2
+  else
+    printf '%s。rollbackにも失敗しました: %s\n' "$original_error" "$rollback_error" >&2
+  fi
+  exit 1
+fi
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {

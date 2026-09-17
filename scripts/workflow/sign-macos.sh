@@ -36,21 +36,13 @@ for output_path in "$assets_directory" "$package_project"; do
   fi
 done
 
-p12_base64=${MACOS_CERTIFICATE_P12_BASE64:?MACOS_CERTIFICATE_P12_BASE64が必要です}
-p12_password=${MACOS_CERTIFICATE_PASSWORD:?MACOS_CERTIFICATE_PASSWORDが必要です}
-if [[ -z "$p12_base64" || -z "$p12_password" ]]; then
-  printf '%s\n' 'macOS signing secretが空です' >&2
-  exit 1
-fi
-
-source_sha=$(jq -er '.sourceSha' "$source_manifest_path")
 source_app_id=$(jq -er '.appId' "$source_manifest_path")
 source_repository=$(jq -er '.repository' "$source_manifest_path")
 source_tag=$(jq -er '.tag' "$source_manifest_path")
 config_digest=$(jq -er '.configDigest' "$source_manifest_path")
-jq -e --arg app_id "$source_app_id" --arg repository "$source_repository" --arg tag "$source_tag" --arg source_sha "$source_sha" \
+jq -e --arg app_id "$source_app_id" --arg repository "$source_repository" --arg tag "$source_tag" \
   --arg config_digest "$config_digest" \
-  '.appId == $app_id and .repository == $repository and .tag == $tag and .sourceSha == $source_sha and .configDigest == $config_digest' \
+  '.appId == $app_id and .repository == $repository and .tag == $tag and .configDigest == $config_digest' \
   "$contract_path" >/dev/null
 
 signing_path="$central_root/config/signing.json"
@@ -112,7 +104,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p -- "$app_root" "$mount_point"
+"$central_root/scripts/workflow/extract-archive.sh" "$unsigned_archive" "$app_root" macos
+mapfile -t app_entries < <(find "$app_root" -mindepth 1 -maxdepth 1 -type d -name '*.app' -print)
+if (( ${#app_entries[@]} != 1 )); then
+  printf '%s\n' 'unsigned macOS archiveは直下一件の.appでなければなりません' >&2
+  exit 1
+fi
+app_path=${app_entries[0]}
+
+p12_base64=${MACOS_CERTIFICATE_P12_BASE64:?MACOS_CERTIFICATE_P12_BASE64が必要です}
+p12_password=${MACOS_CERTIFICATE_PASSWORD:?MACOS_CERTIFICATE_PASSWORDが必要です}
+if [[ -z "$p12_base64" || -z "$p12_password" ]]; then
+  printf '%s\n' 'macOS signing secretが空です' >&2
+  exit 1
+fi
+
+mkdir -p -- "$mount_point"
 printf '%s' "$p12_base64" | openssl base64 -d -A >"$p12_path"
 if [[ ! -s "$p12_path" ]]; then
   printf '%s\n' 'P12をdecodeできません' >&2
@@ -168,15 +175,6 @@ if [[ ! "$identity_hash" =~ ^[0-9A-Fa-f]{40}$ ]]; then
   printf '%s\n' '署名identityのSHA-1 hashを取得できません' >&2
   exit 1
 fi
-
-"$central_root/scripts/workflow/extract-archive.sh" "$unsigned_archive" "$app_root"
-mapfile -t app_entries < <(find "$app_root" -mindepth 1 -maxdepth 1 -type d -name '*.app' -print)
-if (( ${#app_entries[@]} != 1 )); then
-  printf '%s\n' 'unsigned macOS archiveは直下一件の.appでなければなりません' >&2
-  exit 1
-fi
-app_path=${app_entries[0]}
-
 export CENTRAL_SIGN_APP="$app_path"
 export CENTRAL_SIGN_IDENTITY="$identity_hash"
 export CENTRAL_SIGN_KEYCHAIN="$keychain_path"

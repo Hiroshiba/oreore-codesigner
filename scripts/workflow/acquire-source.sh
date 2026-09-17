@@ -11,15 +11,9 @@ artifact_directory=$2
 archive_path=$3
 manifest_path=$4
 central_root=${GITHUB_WORKSPACE:?GITHUB_WORKSPACEが必要です}
-token_file=${CENTRAL_APP_TOKEN_FILE:?CENTRAL_APP_TOKEN_FILEが必要です}
-
-if [[ ! -f "$token_file" || -L "$token_file" ]]; then
-  printf '%s\n' 'GitHub App token fileが不正です' >&2
-  exit 1
-fi
-token=$(<"$token_file")
-if [[ -z "$token" ]]; then
-  printf '%s\n' 'GitHub App tokenが空です' >&2
+token=${CENTRAL_APP_TOKEN:?CENTRAL_APP_TOKENが必要です}
+if [[ -z "$token" || "$token" == *$'\n'* || "$token" == *$'\r'* ]]; then
+  printf '%s\n' 'GitHub App tokenが空またはtransport上不正です' >&2
   exit 1
 fi
 
@@ -44,9 +38,10 @@ cleanup() {
 trap cleanup EXIT
 
 resolved_path="${work_directory}/resolved-tag.json"
-CENTRAL_SOURCE_REPOSITORY=$repository \
-  CENTRAL_SOURCE_TAG=$tag \
-  CENTRAL_TAG_OUTPUT=$resolved_path \
+CENTRAL_APP_TOKEN="$token" \
+  CENTRAL_SOURCE_REPOSITORY="$repository" \
+  CENTRAL_SOURCE_TAG="$tag" \
+  CENTRAL_TAG_OUTPUT="$resolved_path" \
   "$central_root/scripts/workflow/resolve-tag.sh"
 source_sha=$(jq -er '.sourceSha' "$resolved_path")
 commit_timestamp=$(jq -er '.commitTimestamp' "$resolved_path")
@@ -89,6 +84,9 @@ while IFS= read -r -d '' source_path; do
 done < <(git -C "$checkout_directory" ls-files -z)
 
 mkdir -p -- "$artifact_directory" "$(dirname -- "$archive_path")" "$(dirname -- "$manifest_path")"
+(cd "$central_root" && env -u CENTRAL_APP_TOKEN pnpm exec tsx src/cli.ts validate-source \
+  --contract "$contract_path" --source-directory "$checkout_directory" \
+  --output "$artifact_directory/release-contract.json")
 copy_if_different() {
   local source_path=$1
   local destination_path=$2
@@ -96,8 +94,7 @@ copy_if_different() {
     cp -- "$source_path" "$destination_path"
   fi
 }
-GIT_HTTP_EXTRAHEADER="Authorization: Bearer ${token}" \
-GIT_LFS_SKIP_SMUDGE=1 \
+env -u CENTRAL_APP_TOKEN GIT_LFS_SKIP_SMUDGE=1 \
 git -C "$checkout_directory" archive \
   --format=tar \
   --prefix=source/ \

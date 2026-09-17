@@ -12,8 +12,8 @@ if [[ ! "$pnpm_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]
   exit 1
 fi
 
-if [[ ! "$(node --version)" =~ ^v22\.[0-9]+\.[0-9]+$ ]]; then
-  printf '%s\n' '中央Nodeは22.xでなければなりません' >&2
+if [[ "$(node --version)" != v22.14.0 ]]; then
+  printf '中央Nodeは22.14.0でなければなりません: %s\n' "$(node --version)" >&2
   exit 1
 fi
 

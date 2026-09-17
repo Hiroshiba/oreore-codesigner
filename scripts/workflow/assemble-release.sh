@@ -81,8 +81,8 @@ trap cleanup EXIT
 
 mac_directory="$work_directory/macos"
 windows_directory="$work_directory/windows"
-"$central_root/scripts/workflow/extract-archive.sh" "$mac_assets_archive" "$mac_directory"
-"$central_root/scripts/workflow/extract-archive.sh" "$windows_assets_archive" "$windows_directory"
+"$central_root/scripts/workflow/extract-archive.sh" "$mac_assets_archive" "$mac_directory" linux
+"$central_root/scripts/workflow/extract-archive.sh" "$windows_assets_archive" "$windows_directory" linux
 assets_directory="$work_directory/assets"
 mkdir -p -- "$assets_directory"
 for extracted_directory in "$mac_directory" "$windows_directory"; do

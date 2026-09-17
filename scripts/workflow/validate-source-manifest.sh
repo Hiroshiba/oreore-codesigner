@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 if [[ $# -ne 2 ]]; then
-  printf '%s\n' '使い方: validate-source-manifest.sh prepared-contract.json source-manifest.json' >&2
+  printf '%s\n' '使い方: validate-source-manifest.sh release-contract.json source-manifest.json' >&2
   exit 2
 fi
 
