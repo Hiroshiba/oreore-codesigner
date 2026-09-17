@@ -11,9 +11,13 @@ import {
   parsePublishPlan,
   parseRemoteAssets
 } from "./schema.js";
+import { assertManifestAssetNames } from "./release-manifest.js";
+import { assertReleaseContractCurrent } from "./source-validation.js";
 
 function isMetadataRole(role: ReleaseManifest["assets"][number]["role"]): boolean {
-  return role === "macos-metadata" || role === "windows-metadata";
+  return (
+    role === "macos-metadata" || role === "windows-metadata" || role === "windows-web-metadata"
+  );
 }
 
 function assertContractMatch(contract: ReleaseContract, manifest: ReleaseManifest): void {
@@ -41,6 +45,10 @@ function assertUniqueRemoteNames(remoteAssets: RemoteAsset[]): Map<string, Remot
     assets.set(key, remoteAsset);
   }
   return assets;
+}
+
+function normalMetadataName(contract: ReleaseContract): string {
+  return `${contract.application.release.channel}.yml`;
 }
 
 function operationForAsset(
@@ -72,7 +80,7 @@ function operationForAsset(
   ) {
     throw new Error(`同名でdigestが異なるassetは置換できません: ${asset.name}`);
   }
-  if (asset.role === "windows-metadata" && asset.name !== "latest.yml") {
+  if (asset.role === "windows-metadata" && asset.name !== normalMetadataName(contract)) {
     throw new Error("通常NSIS metadataのfilenameが不正です");
   }
   return {
@@ -84,15 +92,16 @@ function operationForAsset(
   };
 }
 
-/** manifestとGitHub remote asset responseから公開計画を生成します。 */
-export function createPublishPlan(
+function createPublishPlanForRoot(
+  rootDirectory: string,
   releaseContractValue: unknown,
   manifestValue: unknown,
   remoteAssetsValue: unknown
 ): PublishPlan {
-  const contract = parseReleaseContract(releaseContractValue);
+  const contract = assertReleaseContractCurrent(rootDirectory, releaseContractValue);
   const manifest = parseReleaseManifest(manifestValue);
   assertContractMatch(contract, manifest);
+  assertManifestAssetNames(contract, manifest);
   const remoteAssets = parseRemoteAssets(remoteAssetsValue);
   const remoteByName = assertUniqueRemoteNames(remoteAssets);
   const assets = [...manifest.assets].sort((left, right) => {
@@ -120,4 +129,32 @@ export function createPublishPlan(
     operations,
     publishOrder: ["payload", "metadata"]
   });
+}
+
+/** manifestとGitHub remote asset responseから公開計画を生成します。 */
+export function createPublishPlan(
+  rootDirectory: string,
+  releaseContractValue: unknown,
+  manifestValue: unknown,
+  remoteAssetsValue: unknown
+): PublishPlan;
+export function createPublishPlan(
+  releaseContractValue: unknown,
+  manifestValue: unknown,
+  remoteAssetsValue: unknown
+): PublishPlan;
+export function createPublishPlan(
+  first: unknown,
+  second: unknown,
+  third: unknown,
+  fourth?: unknown
+): PublishPlan {
+  if (fourth === undefined) {
+    return createPublishPlanForRoot(process.cwd(), first, second, third);
+  }
+  if (typeof first !== "string") {
+    throw new Error("root directoryが不正です");
+  }
+  const contract = parseReleaseContract(second);
+  return createPublishPlanForRoot(first, contract, third, fourth);
 }

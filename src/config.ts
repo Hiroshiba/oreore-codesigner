@@ -1,4 +1,4 @@
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { canonicalDigest } from "./canonical-json.js";
 import {
@@ -10,6 +10,7 @@ import {
 } from "./schema.js";
 
 function readJsonFile(path: string): unknown {
+  assertRegularFile(path, "JSONファイルがありません");
   let source: string;
   try {
     source = readFileSync(path, "utf8");
@@ -26,13 +27,17 @@ function readJsonFile(path: string): unknown {
 function assertRegularFile(path: string, message: string): void {
   let information;
   try {
-    information = statSync(path);
+    information = lstatSync(path);
   } catch (error) {
     throw new Error(`${message}: ${path}`, { cause: error });
   }
-  if (!information.isFile()) {
+  if (information.isSymbolicLink() || !information.isFile()) {
     throw new Error(`${message}: ${path}`);
   }
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && typeof error.code === "string";
 }
 
 function assertUniqueConfiguration(applications: ApplicationsConfig): void {
@@ -100,7 +105,18 @@ export function writeJsonFile(path: string, value: unknown): void {
     throw new Error(`JSONを生成できません: ${path}`);
   }
   try {
-    writeFileSync(path, `${contents}\n`, "utf8");
+    lstatSync(path);
+    throw new Error(`出力先は存在してはいけません: ${path}`);
+  } catch (error) {
+    if (error instanceof Error && error.message === `出力先は存在してはいけません: ${path}`) {
+      throw error;
+    }
+    if (!isErrnoException(error) || error.code !== "ENOENT") {
+      throw new Error(`出力先を確認できません: ${path}`, { cause: error });
+    }
+  }
+  try {
+    writeFileSync(path, `${contents}\n`, { encoding: "utf8", flag: "wx" });
   } catch (error) {
     throw new Error(`JSONファイルを書き込めません: ${path}`, { cause: error });
   }

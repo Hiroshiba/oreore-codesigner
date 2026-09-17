@@ -94,24 +94,41 @@ function executePrepare(options: Map<string, string>): void {
 function executeValidateSource(options: Map<string, string>): void {
   assertAllowedOptions(options, ["contract", "source-directory", "output"]);
   const contract = loadJsonFile(requiredOption(options, "contract"));
-  const releaseContract = validateSource(contract, requiredOption(options, "source-directory"));
+  const releaseContract = validateSource(
+    process.cwd(),
+    contract,
+    requiredOption(options, "source-directory")
+  );
   writeJsonFile(requiredOption(options, "output"), releaseContract);
 }
 
 function executeCreatePackageProject(options: Map<string, string>): void {
-  assertAllowedOptions(options, ["contract", "platform", "output-directory"]);
+  assertAllowedOptions(options, ["contract", "target", "output-directory"]);
   const contract = loadJsonFile(requiredOption(options, "contract"));
-  const platformValue = requiredOption(options, "platform");
-  if (platformValue !== "macos" && platformValue !== "windows") {
-    throw new Error("platformはmacosまたはwindowsで指定してください");
+  const targetValue = requiredOption(options, "target");
+  if (
+    targetValue !== "macos" &&
+    targetValue !== "windows-nsis" &&
+    targetValue !== "windows-nsis-web"
+  ) {
+    throw new Error("targetはmacos、windows-nsis、windows-nsis-webのいずれかです");
   }
-  createPackageProject(contract, platformValue, requiredOption(options, "output-directory"));
+  createPackageProject(
+    process.cwd(),
+    contract,
+    targetValue,
+    requiredOption(options, "output-directory")
+  );
 }
 
 function executeCreateManifest(options: Map<string, string>): void {
   assertAllowedOptions(options, ["contract", "assets-directory", "output"]);
   const contract = loadJsonFile(requiredOption(options, "contract"));
-  const manifest = createReleaseManifest(contract, requiredOption(options, "assets-directory"));
+  const manifest = createReleaseManifest(
+    process.cwd(),
+    contract,
+    requiredOption(options, "assets-directory")
+  );
   writeJsonFile(requiredOption(options, "output"), manifest);
 }
 
@@ -121,7 +138,7 @@ function executePlanPublish(options: Map<string, string>): void {
   const manifest = loadJsonFile(requiredOption(options, "manifest"));
   const remoteAssets = loadJsonFile(requiredOption(options, "remote-assets"));
   assertReleaseSetComplete(manifest);
-  const plan = createPublishPlan(contract, manifest, remoteAssets);
+  const plan = createPublishPlan(process.cwd(), contract, manifest, remoteAssets);
   writeJsonFile(requiredOption(options, "output"), plan);
 }
 

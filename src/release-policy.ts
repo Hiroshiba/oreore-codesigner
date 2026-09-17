@@ -1,4 +1,4 @@
-import { parseSemVer, type ReleaseConfig } from "./schema.js";
+import { parseGitTag, parseSemVer, type ReleaseConfig } from "./schema.js";
 
 function prereleaseIdentifiers(version: string): string[] {
   const withoutBuild = version.split("+")[0];
@@ -25,6 +25,7 @@ function validateChannel(release: ReleaseConfig, version: string): void {
 
 /** prepare段階でtagがrelease policyに沿うことを検証します。 */
 export function validateTagForPrepare(release: ReleaseConfig, tag: string): void {
+  parseGitTag(tag);
   if (release.tagStrategy.type === "rolling") {
     if (tag !== release.tagStrategy.tag) {
       throw new Error(`rolling tagは固定値でなければなりません: ${release.tagStrategy.tag}`);
@@ -43,6 +44,7 @@ export function validateTagForPrepare(release: ReleaseConfig, tag: string): void
 
 /** sourceのpackage versionとtag、channelの一致を検証します。 */
 export function validateReleaseTag(release: ReleaseConfig, tag: string, version: string): void {
+  parseGitTag(tag);
   const parsedVersion = parseSemVer(version);
   if (release.tagStrategy.type === "rolling") {
     if (tag !== release.tagStrategy.tag) {

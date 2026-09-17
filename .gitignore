@@ -19,3 +19,9 @@ certificates/**/private-key.pem
 certificates/**/certificate.p12
 certificates/**/certificate.pfx
 certificates/**/fingerprint.txt
+*.p12
+*.pfx
+*.key
+private-key.pem
+**/private-key.pem
+*private-key*.pem

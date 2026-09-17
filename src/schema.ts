@@ -5,17 +5,67 @@ const semverPattern = new RegExp(
   `^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(${semverIdentifier}(?:\\.${semverIdentifier})*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`
 );
 
-const appIdPattern = /^[A-Za-z0-9][A-Za-z0-9-]*(?:\.[A-Za-z0-9][A-Za-z0-9-]*)+$/;
+const appIdPattern = /^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*)+$/;
 const appKeyPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const buildScriptPattern = /^[A-Za-z0-9:_-]+$/;
 const packageManagerPattern = /^pnpm@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const packageNamePattern = /^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/;
 const repositoryPattern =
   /^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$/;
-const tagPartPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const fingerprintPattern = /^(?:[0-9A-Fa-f]{64}|(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2})$/;
 const digestPattern = /^sha256:[0-9a-fA-F]{64}$/;
+const sha512Pattern = /^(?:[0-9A-Fa-f]{128}|[A-Za-z0-9+/]{86}==)$/;
+
+function isValidGitRef(value: string, allowTrailingSlash: boolean): boolean {
+  if (
+    value.length === 0 ||
+    value === "@" ||
+    value.startsWith("/") ||
+    (!allowTrailingSlash && value.endsWith("/")) ||
+    value.includes("//") ||
+    value.includes("..") ||
+    value.includes("@{") ||
+    (!allowTrailingSlash && value.endsWith(".")) ||
+    value.includes("~") ||
+    value.includes("^") ||
+    value.includes(":") ||
+    value.includes("?") ||
+    value.includes("*") ||
+    value.includes("[") ||
+    value.includes("\\")
+  ) {
+    return false;
+  }
+  for (const character of value) {
+    const code = character.codePointAt(0);
+    if (code === undefined) {
+      throw new Error("tagの文字を解析できません");
+    }
+    if (code <= 0x20 || code === 0x7f) {
+      return false;
+    }
+  }
+  const segments = value.split("/");
+  return segments.every(
+    (segment) =>
+      (allowTrailingSlash && segment === "") ||
+      (segment.length > 0 &&
+        segment !== "." &&
+        segment !== ".." &&
+        !segment.startsWith(".") &&
+        !segment.endsWith(".") &&
+        !segment.endsWith(".lock"))
+  );
+}
+
+function isValidGitTag(value: string): boolean {
+  return isValidGitRef(value, false);
+}
+
+function isValidGitTagPrefix(value: string): boolean {
+  return isValidGitRef(value, true);
+}
 
 const semverSchema = z.string().regex(semverPattern, "SemVer形式で指定してください");
 const appKeySchema = z.string().regex(appKeyPattern, "app_idは小文字kebab-caseで指定してください");
@@ -59,7 +109,8 @@ const centralPathSchema = z
     "中央repo内の相対POSIX pathで指定してください"
   );
 const buildScriptSchema = z.string().regex(buildScriptPattern, "build script名が不正です");
-const tagPartSchema = z.string().regex(tagPartPattern, "tagの一部が不正です");
+const tagPartSchema = z.string().refine(isValidGitTag, "tagはGit refとして不正です");
+const tagPrefixSchema = z.string().refine(isValidGitTagPrefix, "tag prefixが不正です");
 
 const macosRunnerSchema = z.enum(["macos-14", "macos-15"]);
 const windowsRunnerSchema = z.enum(["windows-2022", "windows-2025"]);
@@ -68,7 +119,7 @@ const architectureSchema = z.enum(["x64", "arm64"]);
 const versionedTagStrategySchema = z
   .object({
     type: z.literal("versioned"),
-    prefix: tagPartSchema
+    prefix: tagPrefixSchema
   })
   .strict();
 
@@ -275,7 +326,8 @@ const assetRoleSchema = z.enum([
   "windows-nsis-blockmap",
   "windows-web-setup",
   "windows-web-package",
-  "windows-metadata"
+  "windows-metadata",
+  "windows-web-metadata"
 ]);
 
 const releaseAssetSchema = z
@@ -283,7 +335,8 @@ const releaseAssetSchema = z
     name: nonEmptyStringSchema,
     size: z.number().int().nonnegative(),
     digest: z.string().regex(digestPattern, "digestはsha256:<hex>形式で指定してください"),
-    role: assetRoleSchema
+    role: assetRoleSchema,
+    sha512: z.string().regex(sha512Pattern, "sha512が不正です").optional()
   })
   .strict();
 
@@ -291,7 +344,7 @@ const contractBaseShape = {
   schemaVersion: z.literal(1),
   appId: appKeySchema,
   repository: repositorySchema,
-  tag: z.string().regex(tagPartPattern, "tagが不正です"),
+  tag: tagPartSchema,
   replaceExistingAssets: z.boolean(),
   configDigest: z.string().regex(digestPattern, "configDigestはsha256:<hex>形式で指定してください"),
   application: applicationSchema
@@ -392,9 +445,21 @@ const releaseManifestSchema = z
     schemaVersion: z.literal(1),
     appId: appKeySchema,
     repository: repositorySchema,
-    tag: z.string().regex(tagPartPattern, "tagが不正です"),
+    tag: tagPartSchema,
     version: semverSchema,
-    assets: z.array(releaseAssetSchema)
+    assets: z.array(releaseAssetSchema),
+    metadata: z
+      .array(
+        z
+          .object({
+            role: z.enum(["macos-metadata", "windows-metadata", "windows-web-metadata"]),
+            name: nonEmptyStringSchema,
+            path: nonEmptyStringSchema,
+            files: z.array(nonEmptyStringSchema)
+          })
+          .strict()
+      )
+      .optional()
   })
   .strict();
 
@@ -436,7 +501,7 @@ const publishPlanSchema = z
     schemaVersion: z.literal(1),
     appId: appKeySchema,
     repository: repositorySchema,
-    tag: z.string().regex(tagPartPattern),
+    tag: tagPartSchema,
     operations: z.array(publishOperationSchema),
     publishOrder: z.tuple([z.literal("payload"), z.literal("metadata")])
   })
@@ -518,6 +583,11 @@ export function parseSemVer(value: string): string {
 /** repository文字列を検証します。 */
 export function parseRepository(value: string): string {
   return repositorySchema.parse(value);
+}
+
+/** Git tag文字列を検証します。 */
+export function parseGitTag(value: string): string {
+  return tagPartSchema.parse(value);
 }
 
 /** relative POSIX pathを検証します。 */
