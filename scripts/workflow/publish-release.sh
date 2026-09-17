@@ -37,8 +37,8 @@ if [[ ! "$curl_max_seconds" =~ ^[1-9][0-9]*$ || ! "$operation_timeout_seconds" =
   printf '%s\n' 'publish timeout設定が不正です' >&2
   exit 1
 fi
-if (( operation_timeout_seconds + rollback_reserve_seconds >= 3600 )); then
-  printf '%s\n' 'App tokenの有効時間内にrollback時間を確保できません' >&2
+if (( operation_timeout_seconds > 2400 || rollback_reserve_seconds < 600 || operation_timeout_seconds + rollback_reserve_seconds > 3000 )); then
+  printf '%s\n' 'App token発行後のpublish時間またはrollback予約が契約外です' >&2
   exit 1
 fi
 python_path=$(command -v python3 || true)
@@ -54,6 +54,7 @@ fi
 operation_started_at=$(date +%s)
 operation_deadline=$((operation_started_at + operation_timeout_seconds))
 rollback_deadline=$((operation_deadline + rollback_reserve_seconds))
+normal_mutation_deadline=$operation_deadline
 in_rollback=false
 
 repository=$(jq -er '.repository' "$contract_path")
@@ -74,15 +75,33 @@ jq -e --arg repository "$repository" --arg tag "$tag" --arg source_sha "$source_
   '.repository == $repository and .tag == $tag and .sourceSha == $source_sha and .version == $version and .configDigest == $config_digest and .runUrl == $run_url' \
   "$build_manifest_path" >/dev/null
 
+umask 077
+recovery_directory=${CENTRAL_RECOVERY_DIRECTORY:-"${RUNNER_TEMP:-/tmp}/central-publish-recovery-${GITHUB_RUN_ID:-local}-${app_id}"}
+recovery_artifact_name=${CENTRAL_RECOVERY_ARTIFACT_NAME:-"central-${GITHUB_RUN_ID:-local}-${app_id}-publish-recovery"}
+if [[ -L "$recovery_directory" ]]; then
+  printf '%s\n' 'publish recovery directoryがsymlinkです' >&2
+  exit 1
+fi
+mkdir -p -- "$recovery_directory"
+chmod 700 "$recovery_directory"
+recovery_backup_directory="$recovery_directory/backups"
+mkdir -p -- "$recovery_backup_directory"
+chmod 700 "$recovery_backup_directory"
+cat >"$recovery_directory/recovery-info.txt" <<EOF
+repository=$repository
+tag=$tag
+recovery artifact=$recovery_artifact_name
+失敗時はこのdirectoryを取得し、Release idとasset idをjournalで照合して手動復旧してください。
+EOF
+
 work_directory=$(mktemp -d "${RUNNER_TEMP:-/tmp}/central-publish-release.XXXXXX")
 auth_header_path="$work_directory/authorization-header.txt"
-umask 077
 printf 'Authorization: Bearer %s\n' "$token" >"$auth_header_path"
 remote_assets_path="$work_directory/remote-assets.json"
 release_path="$work_directory/release.json"
 plan_path="$work_directory/publish-plan.json"
 extracted_assets="$work_directory/assets"
-journal_path="${RUNNER_TEMP:-/tmp}/central-publish-journal-${GITHUB_RUN_ID:-local}.jsonl"
+journal_path="$recovery_directory/operation-journal.jsonl"
 cleanup() {
   local status=$?
   local cleanup_status=0
@@ -91,7 +110,12 @@ cleanup() {
     cleanup_status=1
   fi
   if (( status != 0 )); then
+    printf 'durable recovery artifact: %s\nmanual recovery directory: %s\n' "$recovery_artifact_name" "$recovery_directory" >&2
     exit "$status"
+  fi
+  if ! rm -rf -- "$recovery_directory"; then
+    printf '%s\n' '成功後のpublish recovery directory削除に失敗しました' >&2
+    cleanup_status=1
   fi
   exit "$cleanup_status"
 }
@@ -101,24 +125,67 @@ urlencode() {
   jq -nr --arg value "$1" '$value | @uri'
 }
 
-ensure_time_budget() {
+request_timeout_seconds() {
   local phase=$1
   local now
+  local deadline
+  local remaining
   now=$(date +%s)
+  deadline=$operation_deadline
   if [[ "$in_rollback" == true ]]; then
-    if (( now + curl_max_seconds >= rollback_deadline )); then
+    deadline=$rollback_deadline
+  fi
+  remaining=$((deadline - now))
+  if (( remaining <= 0 )); then
+    if [[ "$in_rollback" == true ]]; then
       printf 'rollback時間を確保できません: %s\n' "$phase" >&2
-      return 1
+    else
+      printf 'publish時間を確保できません: %s\n' "$phase" >&2
     fi
-  elif (( now + rollback_reserve_seconds + curl_max_seconds >= operation_deadline )); then
-    printf 'publish時間を確保できません: %s\n' "$phase" >&2
     return 1
   fi
+  if (( remaining > curl_max_seconds )); then
+    remaining=$curl_max_seconds
+  fi
+  printf '%s\n' "$remaining"
+}
+
+ensure_time_budget() {
+  local phase=$1
+  request_timeout_seconds "$phase" >/dev/null
+}
+
+append_journal_line() {
+  local line=$1
+  if [[ "$line" == *$'\n'* || "$line" == *$'\r'* ]]; then
+    printf '%s\n' 'journalに改行を含められません' >&2
+    return 1
+  fi
+  "$python_path" - "$journal_path" "$line" <<'PY'
+import os
+import sys
+
+journal_path = sys.argv[1]
+line = sys.argv[2].encode("utf-8") + b"\n"
+descriptor = os.open(journal_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+try:
+    written = 0
+    while written < len(line):
+        written += os.write(descriptor, line[written:])
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+PY
 }
 
 sleep_for_retry() {
   local seconds=$1
-  if ! ensure_time_budget 'retry待機'; then
+  local deadline=$operation_deadline
+  if [[ "$in_rollback" == true ]]; then
+    deadline=$rollback_deadline
+  fi
+  if (( $(date +%s) + seconds >= deadline )); then
+    printf '%s\n' 'retry待機後の時間予算が不足しています' >&2
     return 1
   fi
   sleep "$seconds"
@@ -138,7 +205,7 @@ CENTRAL_SOURCE_TAG="$tag" \
   CENTRAL_APP_TOKEN="$token" \
   CENTRAL_TAG_OUTPUT="$resolved_tag_path" \
   CENTRAL_CURL_MAX_SECONDS="$curl_max_seconds" \
-  CENTRAL_DEADLINE_EPOCH="$operation_deadline" \
+  CENTRAL_DEADLINE_EPOCH="$normal_mutation_deadline" \
   "$central_root/scripts/workflow/resolve-tag.sh"
 resolved_source_sha=$(jq -er '.sourceSha' "$resolved_tag_path")
 if [[ "${resolved_source_sha,,}" != "${source_sha,,}" ]]; then
@@ -154,13 +221,14 @@ request_once() {
   local content_type=$5
   local response_code
   local curl_status=0
-  if ! ensure_time_budget "GitHub API $method"; then
+  local request_timeout
+  if ! request_timeout=$(request_timeout_seconds "GitHub API $method"); then
     HTTP_STATUS=000
     return 1
   fi
   if [[ -n "$body_path" ]]; then
     response_code=$(curl --silent --show-error --request "$method" \
-      --connect-timeout "$curl_max_seconds" --max-time "$curl_max_seconds" \
+      --connect-timeout "$request_timeout" --max-time "$request_timeout" \
       --header 'Accept: application/vnd.github+json' \
       --header 'X-GitHub-Api-Version: 2022-11-28' \
       --header "@$auth_header_path" \
@@ -168,7 +236,7 @@ request_once() {
       --output "$output_path" --write-out '%{http_code}' "$url") || curl_status=$?
   else
     response_code=$(curl --silent --show-error --request "$method" \
-      --connect-timeout "$curl_max_seconds" --max-time "$curl_max_seconds" \
+      --connect-timeout "$request_timeout" --max-time "$request_timeout" \
       --header 'Accept: application/vnd.github+json' \
       --header 'X-GitHub-Api-Version: 2022-11-28' \
       --header "@$auth_header_path" \
@@ -246,20 +314,22 @@ request_download_once() {
   local url=$1
   local output_path=$2
   local header_path="$work_directory/download-headers.txt"
+  local api_body_path="$work_directory/download-api-body"
   local response_code
   local curl_status=0
   local location
-  if ! ensure_time_budget 'Release asset download'; then
+  local request_timeout
+  if ! request_timeout=$(request_timeout_seconds 'Release asset API download'); then
     HTTP_STATUS=000
     return 1
   fi
-  rm -f -- "$header_path"
+  rm -f -- "$header_path" "$api_body_path" "$output_path"
   response_code=$(curl --silent --show-error --request GET \
-    --connect-timeout "$curl_max_seconds" --max-time "$curl_max_seconds" \
+    --connect-timeout "$request_timeout" --max-time "$request_timeout" \
     --header 'Accept: application/octet-stream' \
     --header 'X-GitHub-Api-Version: 2022-11-28' \
     --header "@$auth_header_path" \
-    --dump-header "$header_path" --output /dev/null --write-out '%{http_code}' "$url") || curl_status=$?
+    --dump-header "$header_path" --output "$api_body_path" --write-out '%{http_code}' "$url") || curl_status=$?
   if (( curl_status != 0 )); then
     HTTP_STATUS=000
     return
@@ -269,7 +339,16 @@ request_download_once() {
     return
   fi
   HTTP_STATUS=$response_code
+  if [[ "$HTTP_STATUS" == 200 ]]; then
+    if ! mv -- "$api_body_path" "$output_path"; then
+      HTTP_STATUS=000
+      printf '%s\n' 'Release asset APIのdirect body保存に失敗しました' >&2
+      return 1
+    fi
+    return 0
+  fi
   if [[ ! "$HTTP_STATUS" =~ ^3[0-9][0-9]$ ]]; then
+    printf 'Release asset APIが200またはredirect以外を返しました: HTTP %s\n' "$HTTP_STATUS" >&2
     return
   fi
   location=$(awk 'tolower($1) == "location:" { sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit }' "$header_path")
@@ -282,9 +361,13 @@ request_download_once() {
     HTTP_STATUS=400
     return 1
   fi
-  rm -f -- "$output_path"
+  if ! request_timeout=$(request_timeout_seconds 'Release asset CDN download'); then
+    HTTP_STATUS=000
+    return 1
+  fi
+  curl_status=0
   response_code=$(curl --silent --show-error --request GET \
-    --connect-timeout "$curl_max_seconds" --max-time "$curl_max_seconds" \
+    --connect-timeout "$request_timeout" --max-time "$request_timeout" \
     --proto '=https' --output "$output_path" --write-out '%{http_code}' "$location") || curl_status=$?
   if (( curl_status != 0 )); then
     HTTP_STATUS=000
@@ -305,9 +388,13 @@ download_remote_asset() {
   for attempt in 1 2 3; do
     rm -f -- "$output_path"
     request_download_once "$api_url/repos/$encoded_repository/releases/assets/$asset_id" "$output_path"
-    if [[ "$HTTP_STATUS" =~ ^2[0-9][0-9]$ ]]; then
+    if [[ "$HTTP_STATUS" == 200 ]]; then
       local actual_size
       local actual_digest
+      if [[ ! -f "$output_path" || -L "$output_path" ]]; then
+        printf 'remote assetのbodyが通常fileではありません: %s\n' "$asset_name" >&2
+        return 1
+      fi
       actual_size=$(wc -c <"$output_path" | tr -d '[:space:]')
       actual_digest="sha256:$(sha256sum "$output_path" | awk '{print tolower($1)}')"
       if [[ "$actual_size" == "$expected_size" && "$actual_digest" == "${expected_digest,,}" ]]; then
@@ -376,16 +463,23 @@ reconfirm_release_id_only() {
   local current_path="$work_directory/reconfirm-release.json"
   local current_id
   local current_tag
+  local current_state
+  local current_draft
+  local current_prerelease
+  local current_immutable
   if ! request_read GET "$api_url/repos/$encoded_repository/releases/tags/$encoded_tag" "$current_path"; then
     release_conflict_error="Release再確認に失敗しました: HTTP $HTTP_STATUS"
     return 1
   fi
-  if ! current_id=$(jq -er '.id | numbers | select(. > 0)' "$current_path") || ! current_tag=$(jq -er '.tag_name' "$current_path"); then
+  if ! current_id=$(jq -er '.id | numbers | select(. > 0)' "$current_path") || ! current_tag=$(jq -er '.tag_name' "$current_path") || ! current_state=$(bash "$central_root/scripts/workflow/read-release-state.sh" "$current_path"); then
     release_conflict_error='Release再確認の応答が不正です'
     return 1
   fi
-  if [[ "$current_id" != "$release_id" || "$current_tag" != "$tag" ]]; then
-    release_conflict_error="Release競合を検出しました: expected_id=$release_id actual_id=$current_id expected_tag=$tag actual_tag=$current_tag"
+  current_draft=$(jq -r '.draft' <<<"$current_state")
+  current_prerelease=$(jq -r '.prerelease' <<<"$current_state")
+  current_immutable=$(jq -r '.immutable' <<<"$current_state")
+  if [[ "$current_id" != "$initial_release_id" || "$current_tag" != "$initial_release_tag" || "$current_draft" != "$initial_draft" || "$current_prerelease" != "$initial_prerelease" || "$current_immutable" != "$initial_immutable" || "$current_immutable" != false ]]; then
+    release_conflict_error="Release状態が初期値から変化しました: expected_id=$initial_release_id actual_id=$current_id expected_tag=$initial_release_tag actual_tag=$current_tag expected_draft=$initial_draft actual_draft=$current_draft expected_prerelease=$initial_prerelease actual_prerelease=$current_prerelease expected_immutable=$initial_immutable actual_immutable=$current_immutable"
     return 1
   fi
   return 0
@@ -394,7 +488,7 @@ reconfirm_release_id_only() {
 reconfirm_mutation_context() {
   local current_tag_path="$work_directory/reconfirm-tag.json"
   local current_source_sha
-  local deadline_epoch=$operation_deadline
+  local deadline_epoch=$normal_mutation_deadline
   if [[ "$in_rollback" == true ]]; then
     deadline_epoch=$rollback_deadline
   fi
@@ -449,6 +543,39 @@ remote_has_name() {
   jq -e --arg name "$name" 'any(.[]; .name == $name)' "$remote_assets_path" >/dev/null
 }
 
+journal_mutation_intent() {
+  local operation=$1
+  local action=$2
+  local role=$3
+  local name=$4
+  local asset_id_json=$5
+  local digest=$6
+  local size=$7
+  local intent=$8
+  journal_line=$(jq -c -n \
+    --arg event intent --arg operation "$operation" --arg action "$action" --arg role "$role" \
+    --arg name "$name" --arg digest "$digest" --arg intent "$intent" \
+    --argjson release_id "$initial_release_id" --argjson asset_id "$asset_id_json" --argjson size "$size" \
+    '{event: $event, operation: $operation, action: $action, role: $role, expectedReleaseId: $release_id, assetId: $asset_id, name: $name, digest: $digest, size: $size, intent: $intent}')
+  append_journal_line "$journal_line"
+}
+
+journal_mutation_result() {
+  local operation=$1
+  local action=$2
+  local role=$3
+  local name=$4
+  local asset_id_json=$5
+  local status=$6
+  local result=$7
+  journal_line=$(jq -c -n \
+    --arg event result --arg operation "$operation" --arg action "$action" --arg role "$role" \
+    --arg name "$name" --arg result "$result" --argjson release_id "$initial_release_id" \
+    --argjson asset_id "$asset_id_json" --argjson status "$status" \
+    '{event: $event, operation: $operation, action: $action, role: $role, expectedReleaseId: $release_id, assetId: $asset_id, name: $name, httpStatus: $status, result: $result}')
+  append_journal_line "$journal_line"
+}
+
 delete_asset() {
   local asset_id=$1
   local asset_name=$2
@@ -456,6 +583,11 @@ delete_asset() {
   local response_path="$work_directory/delete-response.json"
   local current_record
   local current_id
+  local current_digest
+  local expected_digest
+  local current_size
+  local asset_id_json
+  local mutation_status
   if [[ "$in_rollback" == true ]]; then
     if ! ensure_time_budget "rollback asset削除: $asset_name" || ! reconfirm_mutation_context; then
       return 1
@@ -470,17 +602,35 @@ delete_asset() {
     return 1
   fi
   current_record=$(remote_asset_record "$asset_name")
-  if [[ "$current_record" == null ]] || ! current_id=$(jq -er '.id | numbers' <<<"$current_record") || [[ "$current_id" != "$asset_id" ]]; then
+  if [[ "$current_record" == null ]] || ! current_id=$(jq -er '.id | numbers' <<<"$current_record") || ! current_digest=$(jq -er '.digest | strings | ascii_downcase' <<<"$current_record") || ! current_size=$(jq -er '.size | numbers' <<<"$current_record") || [[ "$current_id" != "$asset_id" ]]; then
     printf 'asset削除対象が再確認時点で変化しました: %s\n' "$asset_name" >&2
     return 1
   fi
+  expected_digest=$current_digest
+  asset_id_json=$asset_id
   for attempt in 1 2 3; do
+    if ! reconfirm_mutation_context; then
+      return 1
+    fi
+    if ! fetch_remote_assets; then
+      printf 'asset削除retry前のremote asset再取得に失敗しました: %s\n' "$asset_name" >&2
+      return 1
+    fi
+    current_record=$(remote_asset_record "$asset_name")
+    if [[ "$current_record" == null ]] || ! current_id=$(jq -er '.id | numbers' <<<"$current_record") || ! current_digest=$(jq -er '.digest | strings | ascii_downcase' <<<"$current_record") || ! current_size=$(jq -er '.size | numbers' <<<"$current_record") || [[ "$current_id" != "$asset_id" || "$current_digest" != "$expected_digest" ]]; then
+      manual_conflicts["$asset_name"]="asset削除retry前にasset idまたはdigestが変化しました"
+      return 1
+    fi
+    if ! journal_mutation_intent delete '' '' "$asset_name" "$asset_id_json" "$current_digest" "$current_size" "asset id=$asset_id attempt=$attemptを削除"; then
+      return 1
+    fi
     request_once DELETE "$api_url/repos/$encoded_repository/releases/assets/$asset_id" "$response_path" '' ''
+    mutation_status=$HTTP_STATUS
     if [[ "$HTTP_STATUS" == 204 ]]; then
-      deleted_names["$asset_name"]=true
-      if ! jq -c -n --arg event deleted --arg name "$asset_name" --argjson asset_id "$asset_id" \
-        '{event: $event, name: $name, assetId: $asset_id}' >>"$journal_path"; then
-        printf 'asset削除journalの記録に失敗しました: %s\n' "$asset_name" >&2
+      if [[ "${initial_ids[$asset_name]:-}" == "$asset_id" ]]; then
+        deleted_initial_ids["$asset_name"]=true
+      fi
+      if ! journal_mutation_result delete '' '' "$asset_name" "$asset_id_json" 204 deleted; then
         return 1
       fi
       return 0
@@ -490,14 +640,28 @@ delete_asset() {
       return 1
     fi
     if is_retryable_status "$HTTP_STATUS"; then
-      if fetch_remote_assets && ! remote_has_name "$asset_name"; then
-        deleted_names["$asset_name"]=true
-        if ! jq -c -n --arg event deleted --arg name "$asset_name" --argjson asset_id "$asset_id" \
-          '{event: $event, name: $name, assetId: $asset_id, uncertain: true}' >>"$journal_path"; then
-          printf 'asset削除journalの記録に失敗しました: %s\n' "$asset_name" >&2
+      if fetch_remote_assets; then
+        current_record=$(remote_asset_record "$asset_name")
+        if [[ "$current_record" == null ]]; then
+          if [[ "${initial_ids[$asset_name]:-}" == "$asset_id" ]]; then
+            deleted_initial_ids["$asset_name"]=true
+          fi
+          if ! journal_mutation_result delete '' '' "$asset_name" "$asset_id_json" "$mutation_status" deleted-after-recheck; then
+            return 1
+          fi
+          return 0
+        fi
+        if current_id=$(jq -er '.id | numbers' <<<"$current_record") && [[ "$current_id" != "$asset_id" ]]; then
+          manual_conflicts["$asset_name"]="削除の曖昧応答後にasset idが変化しました: expected=$asset_id actual=$current_id"
           return 1
         fi
-        return 0
+        if [[ "$current_record" != null ]] && current_digest=$(jq -er '.digest | strings | ascii_downcase' <<<"$current_record") && [[ "$current_digest" != "$expected_digest" ]]; then
+          manual_conflicts["$asset_name"]="削除の曖昧応答後にasset digestが変化しました: expected=$expected_digest actual=$current_digest"
+          return 1
+        fi
+      elif [[ "$HTTP_STATUS" == 401 ]]; then
+        printf 'asset削除再確認API tokenが期限切れまたは権限不正です: %s\n' "$asset_name" >&2
+        return 1
       fi
       if (( attempt < 3 )); then
         if ! sleep_for_retry "$attempt"; then
@@ -511,7 +675,6 @@ delete_asset() {
   done
   return 1
 }
-
 upload_asset() {
   local asset_name=$1
   local digest=$2
@@ -522,6 +685,9 @@ upload_asset() {
   local encoded_name
   local attempt
   local response_path="$work_directory/upload-response.json"
+  local current_record
+  local current_id
+  local mutation_status
   if [[ "$in_rollback" == true ]]; then
     if ! ensure_time_budget "rollback asset upload: $asset_name" || ! reconfirm_mutation_context; then
       return 1
@@ -541,8 +707,23 @@ upload_asset() {
   fi
   encoded_name=$(urlencode "$asset_name")
   for attempt in 1 2 3; do
+    if ! reconfirm_mutation_context; then
+      return 1
+    fi
+    if ! fetch_remote_assets; then
+      printf 'asset upload retry前のremote asset再取得に失敗しました: %s\n' "$asset_name" >&2
+      return 1
+    fi
+    if remote_has_name "$asset_name"; then
+      manual_conflicts["$asset_name"]="asset upload retry前に同名assetが存在します"
+      return 1
+    fi
+    if ! journal_mutation_intent upload "$action" "$role" "$asset_name" null "$digest" "$size" "asset name=$asset_name attempt=$attemptをupload"; then
+      return 1
+    fi
     request_once POST "$upload_api_url/repos/$encoded_repository/releases/$release_id/assets?name=$encoded_name" \
       "$response_path" "$asset_path" 'Content-Type: application/octet-stream'
+    mutation_status=$HTTP_STATUS
     if [[ "$HTTP_STATUS" == 201 ]]; then
       if ! mark_upload_success "$action" "$role" "$asset_name" "$digest" "$size" "$response_path"; then
         return 1
@@ -555,10 +736,14 @@ upload_asset() {
     fi
     if is_retryable_status "$HTTP_STATUS"; then
       if fetch_remote_assets && remote_has_digest "$asset_name" "$digest" "$size"; then
-        if ! mark_upload_success "$action" "$role" "$asset_name" "$digest" "$size" ''; then
-          return 1
-        fi
-        return 0
+        current_record=$(remote_asset_record "$asset_name")
+        current_id=$(jq -er '.id | numbers' <<<"$current_record")
+        manual_conflicts["$asset_name"]="uploadの曖昧応答後にasset idを確定できません: observed=$current_id"
+        journal_mutation_result upload "$action" "$role" "$asset_name" "$current_id" "$mutation_status" manual-conflict
+        return 1
+      elif [[ "$HTTP_STATUS" == 401 ]]; then
+        printf 'asset upload再確認API tokenが期限切れまたは権限不正です: %s\n' "$asset_name" >&2
+        return 1
       fi
       if (( attempt < 3 )); then
         if ! sleep_for_retry "$attempt"; then
@@ -589,6 +774,23 @@ if [[ "$release_tag" != "$tag" || "$draft" != false ]]; then
   printf '%s\n' '対象Releaseのtagまたはdraft状態が不正です' >&2
   exit 1
 fi
+if [[ "$immutable" != false ]]; then
+  printf '%s\n' 'immutable Releaseは公開対象にできません' >&2
+  exit 1
+fi
+initial_release_id=$release_id
+initial_release_tag=$release_tag
+initial_draft=$draft
+initial_prerelease=$prerelease
+initial_immutable=$immutable
+jq -n \
+  --argjson id "$initial_release_id" \
+  --arg tag "$initial_release_tag" \
+  --argjson draft "$initial_draft" \
+  --argjson prerelease "$initial_prerelease" \
+  --argjson immutable "$initial_immutable" \
+  '{id: $id, tag: $tag, draft: $draft, prerelease: $prerelease, immutable: $immutable}' \
+  >"$recovery_directory/initial-release-state.json"
 case "$channel" in
   latest)
     if [[ "$prerelease" != false ]]; then
@@ -629,8 +831,10 @@ fi
 jq -e --arg repository "$repository" --arg tag "$tag" \
   '.schemaVersion == 1 and .repository == $repository and .tag == $tag and .publishOrder == ["payload", "metadata"]' \
   "$plan_path" >/dev/null
+cp -- "$plan_path" "$recovery_directory/publish-plan.json"
+cp -- "$remote_assets_path" "$recovery_directory/initial-remote-assets.json"
 
-backup_directory="$work_directory/backups"
+backup_directory="$recovery_backup_directory"
 mkdir -p -- "$backup_directory"
 declare -a backup_names=()
 declare -a backup_digests=()
@@ -638,11 +842,14 @@ declare -a backup_sizes=()
 declare -a backup_new_digests=()
 declare -a backup_new_sizes=()
 declare -a backup_paths=()
+declare -a backup_ids=()
+declare -a created_ids=()
 declare -a created_names=()
 declare -a created_digests=()
 declare -a created_sizes=()
-declare -A initial_exists=()
-declare -A deleted_names=()
+declare -A initial_ids=()
+declare -A deleted_initial_ids=()
+declare -A manual_conflicts=()
 
 write_journal_initial() {
   local operation_json
@@ -654,6 +861,7 @@ write_journal_initial() {
   local remote_record
   umask 077
   : >"$journal_path"
+  chmod 600 "$journal_path"
   while IFS= read -r operation_json; do
     [[ -z "$operation_json" ]] && continue
     action=$(jq -er '.action' <<<"$operation_json")
@@ -663,9 +871,9 @@ write_journal_initial() {
     size=$(jq -er '.size | numbers' <<<"$operation_json")
     remote_record=$(remote_asset_record "$name")
     if [[ "$remote_record" != null ]]; then
-      initial_exists["$name"]=true
+      initial_ids["$name"]=$(jq -er '.id | numbers' <<<"$remote_record")
     fi
-    if ! jq -c -n \
+    if ! journal_line=$(jq -c -n \
       --arg event initial \
       --arg action "$action" \
       --arg role "$role" \
@@ -673,8 +881,10 @@ write_journal_initial() {
       --arg digest "$digest" \
       --argjson size "$size" \
       --argjson remote "$remote_record" \
-      '{event: $event, action: $action, role: $role, name: $name, digest: $digest, size: $size, remote: $remote}' \
-      >>"$journal_path"; then
+      '{event: $event, action: $action, role: $role, name: $name, digest: $digest, size: $size, remote: $remote}'); then
+      return 1
+    fi
+    if ! append_journal_line "$journal_line"; then
       return 1
     fi
   done < <(jq -c '.operations[]' "$plan_path")
@@ -688,37 +898,29 @@ mark_upload_success() {
   local size=$5
   local response_path=$6
   local asset_id
-  if [[ "$in_rollback" == false && -z "${initial_exists[$name]+present}" ]]; then
+  if [[ -z "$response_path" ]] || ! asset_id=$(jq -er '.id | numbers | select(. > 0)' "$response_path"); then
+    manual_conflicts["$name"]='upload応答でasset idを確定できません'
+    journal_line=$(jq -c -n \
+      --arg event result --arg operation upload --arg action "$action" --arg role "$role" \
+      --arg name "$name" --arg digest "$digest" --argjson size "$size" --argjson release_id "$initial_release_id" \
+      '{event: $event, operation: $operation, action: $action, role: $role, expectedReleaseId: $release_id, name: $name, digest: $digest, size: $size, assetId: null, httpStatus: 201, assetIdVerified: false}')
+    append_journal_line "$journal_line"
+    return 1
+  fi
+  if [[ "$in_rollback" == false ]]; then
+    created_ids+=("$asset_id")
     created_names+=("$name")
     created_digests+=("$digest")
     created_sizes+=("$size")
   fi
-  if [[ -n "$response_path" ]] && asset_id=$(jq -er '.id | numbers' "$response_path"); then
-    if ! jq -c -n \
-      --arg event uploaded \
-      --arg action "$action" \
-      --arg role "$role" \
-      --arg name "$name" \
-      --arg digest "$digest" \
-      --argjson size "$size" \
-      --argjson asset_id "$asset_id" \
-      '{event: $event, action: $action, role: $role, name: $name, digest: $digest, size: $size, assetId: $asset_id}' \
-      >>"$journal_path"; then
-      return 1
-    fi
-  else
-    if ! jq -c -n \
-      --arg event uploaded \
-      --arg action "$action" \
-      --arg role "$role" \
-      --arg name "$name" \
-      --arg digest "$digest" \
-      --argjson size "$size" \
-      '{event: $event, action: $action, role: $role, name: $name, digest: $digest, size: $size, assetIdVerified: false}' \
-      >>"$journal_path"; then
-      return 1
-    fi
+  if ! journal_line=$(jq -c -n \
+    --arg event result --arg operation upload --arg action "$action" --arg role "$role" \
+    --arg name "$name" --arg digest "$digest" --argjson size "$size" --argjson release_id "$initial_release_id" \
+    --argjson asset_id "$asset_id" \
+    '{event: $event, operation: $operation, action: $action, role: $role, expectedReleaseId: $release_id, name: $name, digest: $digest, size: $size, assetId: $asset_id, httpStatus: 201, assetIdVerified: true}'); then
+    return 1
   fi
+  append_journal_line "$journal_line"
 }
 
 prepare_backups() {
@@ -760,11 +962,17 @@ prepare_backups() {
       return 1
     fi
     backup_names[index]="$name"
+    backup_ids[index]="$asset_id"
     backup_digests[index]="$digest"
     backup_sizes[index]="$size"
     backup_new_digests[index]="$new_digest"
     backup_new_sizes[index]="$new_size"
     backup_paths[index]="$backup_path"
+    jq -n \
+      --arg name "$name" --argjson asset_id "$asset_id" --arg digest "$digest" --argjson size "$size" \
+      --arg new_digest "$new_digest" --argjson new_size "$new_size" \
+      '{name: $name, assetId: $asset_id, digest: $digest, size: $size, replacementDigest: $new_digest, replacementSize: $new_size}' \
+      >"$recovery_backup_directory/$index.json"
     index=$((index + 1))
   done < <(jq -c '.operations[]' "$plan_path")
 }
@@ -914,46 +1122,80 @@ append_rollback_error() {
   fi
 }
 
+is_confirmed_created_id() {
+  local candidate=$1
+  local index
+  for ((index = 0; index < ${#created_ids[@]}; index++)); do
+    if [[ "${created_ids[index]}" == "$candidate" ]] && jq -s -e --argjson id "$candidate" --argjson release_id "$initial_release_id" \
+      'any(.[]; .event == "result" and .operation == "upload" and .expectedReleaseId == $release_id and .httpStatus == 201 and .assetId == $id and .assetIdVerified == true)' \
+      "$journal_path" >/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+journal_confirms_deleted_id() {
+  local candidate=$1
+  jq -s -e --argjson id "$candidate" --argjson release_id "$initial_release_id" \
+    'any(.[]; .event == "result" and .operation == "delete" and .expectedReleaseId == $release_id and (.result == "deleted" or .result == "deleted-after-recheck") and .assetId == $id)' \
+    "$journal_path" >/dev/null
+}
+
 rollback_created_assets() {
   local index
+  local created_id
   local name
   local expected_digest
   local expected_size
   local current_record
-  local current_count
   local current_digest
   local current_size
-  local current_id
+  local current_name
+  local id_count
   if ! fetch_remote_assets; then
     append_rollback_error '新規asset削除前のremote asset取得に失敗しました'
     return 1
   fi
-  for ((index = 0; index < ${#created_names[@]}; index++)); do
+  for ((index = 0; index < ${#created_ids[@]}; index++)); do
+    created_id=${created_ids[index]}
     name=${created_names[index]}
     expected_digest=${created_digests[index]}
     expected_size=${created_sizes[index]}
-    current_count=$(jq --arg name "$name" '[.[] | select(.name == $name)] | length' "$remote_assets_path")
-    if [[ "$current_count" == 0 ]]; then
+    id_count=$(jq --argjson id "$created_id" '[.[] | select(.id == $id)] | length' "$remote_assets_path")
+    if [[ "$id_count" == 0 ]]; then
+      if jq -e --arg name "$name" 'any(.[]; .name == $name)' "$remote_assets_path" >/dev/null; then
+        manual_conflicts["$name"]="このrunの新規asset id=$created_idが消失し同名assetが存在します"
+        append_rollback_error "新規asset idの外部競合: $created_id"
+      fi
       continue
     fi
-    if [[ "$current_count" != 1 ]]; then
-      append_rollback_error "新規assetが重複しています: $name"
+    if [[ "$id_count" != 1 ]]; then
+      append_rollback_error "新規asset idが重複しています: $created_id"
       continue
     fi
-    current_record=$(remote_asset_record "$name")
+    current_record=$(jq -c --argjson id "$created_id" '[.[] | select(.id == $id)][0]' "$remote_assets_path")
+    current_name=$(jq -er '.name' <<<"$current_record")
     current_digest=$(jq -er '.digest | strings | ascii_downcase' <<<"$current_record")
     current_size=$(jq -er '.size | numbers' <<<"$current_record")
-    if [[ "$current_digest" != "$expected_digest" || "$current_size" != "$expected_size" ]]; then
-      append_rollback_error "新規assetの競合を検出しました: $name"
+    if [[ "$current_name" != "$name" || "$current_digest" != "$expected_digest" || "$current_size" != "$expected_size" ]]; then
+      manual_conflicts["$name"]="新規asset idのnameまたはdigestが変化しました: id=$created_id"
+      append_rollback_error "新規assetの競合を検出しました: $name id=$created_id"
       continue
     fi
-    current_id=$(jq -er '.id | numbers' <<<"$current_record")
-    if ! delete_asset "$current_id" "$name"; then
-      append_rollback_error "新規assetの削除に失敗しました: $name"
+    if ! delete_asset "$created_id" "$name"; then
+      append_rollback_error "新規assetの削除に失敗しました: $name id=$created_id"
       continue
     fi
-    if ! fetch_remote_assets || remote_has_name "$name"; then
-      append_rollback_error "新規asset削除後の検証に失敗しました: $name"
+    if ! fetch_remote_assets; then
+      append_rollback_error "新規asset削除後のremote asset取得に失敗しました: $name"
+      continue
+    fi
+    if jq -e --argjson id "$created_id" 'any(.[]; .id == $id)' "$remote_assets_path" >/dev/null; then
+      append_rollback_error "新規asset idが削除後も残っています: $created_id"
+    elif jq -e --arg name "$name" 'any(.[]; .name == $name)' "$remote_assets_path" >/dev/null; then
+      manual_conflicts["$name"]="新規asset削除後に別asset idが同名で存在します"
+      append_rollback_error "新規asset削除後の同名競合: $name"
     fi
   done
 }
@@ -966,6 +1208,7 @@ rollback_backups() {
   local new_digest
   local new_size
   local backup_path
+  local initial_id
   local current_record
   local current_count
   local current_digest
@@ -986,6 +1229,11 @@ rollback_backups() {
   if ! rollback_created_assets; then
     append_rollback_error '新規assetのrollbackに失敗しました'
   fi
+  if [[ -n "$release_conflict_error" ]]; then
+    append_rollback_error "$release_conflict_error。別Releaseへrollbackしません"
+    in_rollback=false
+    return 1
+  fi
   if ! fetch_remote_assets; then
     append_rollback_error 'rollback前のremote asset取得に失敗しました'
     in_rollback=false
@@ -998,27 +1246,37 @@ rollback_backups() {
     new_digest=${backup_new_digests[index]}
     new_size=${backup_new_sizes[index]}
     backup_path=${backup_paths[index]}
+    initial_id=${backup_ids[index]}
     current_count=$(jq --arg name "$name" '[.[] | select(.name == $name)] | length' "$remote_assets_path")
     if [[ "$current_count" -gt 1 ]]; then
       append_rollback_error "rollback対象assetが重複しています: $name"
       continue
     fi
-    if [[ "$current_count" == 0 && -z "${deleted_names[$name]+present}" ]]; then
-      append_rollback_error "rollback対象assetが予期せず消失しています: $name"
-      continue
+    if [[ "$current_count" == 0 ]]; then
+      if [[ -z "${deleted_initial_ids[$name]+present}" ]] || ! journal_confirms_deleted_id "$initial_id"; then
+        manual_conflicts["$name"]="初期asset id=$initial_idの消失をjournalで確認できません"
+        append_rollback_error "rollback対象assetが予期せず消失しています: $name id=$initial_id"
+        continue
+      fi
     fi
     if [[ "$current_count" == 1 ]]; then
       current_record=$(jq -c --arg name "$name" '[.[] | select(.name == $name)][0]' "$remote_assets_path")
+      current_id=$(jq -er '.id | numbers' <<<"$current_record")
       current_digest=$(jq -er '.digest | ascii_downcase' <<<"$current_record")
       current_size=$(jq -er '.size | numbers' <<<"$current_record")
-      if [[ "$current_digest" == "$old_digest" && "$current_size" == "$old_size" ]]; then
+      if [[ "$current_id" == "$initial_id" ]]; then
+        if [[ "$current_digest" == "$old_digest" && "$current_size" == "$old_size" ]]; then
+          continue
+        fi
+        manual_conflicts["$name"]="初期asset id=$initial_idのdigestが変化しました"
+        append_rollback_error "初期assetの競合を検出しました: $name id=$initial_id"
         continue
       fi
-      if [[ "$current_digest" != "$new_digest" || "$current_size" != "$new_size" ]]; then
-        append_rollback_error "競合のためassetを安全に復元できません: $name"
+      if ! is_confirmed_created_id "$current_id" || [[ "$current_digest" != "$new_digest" || "$current_size" != "$new_size" ]]; then
+        manual_conflicts["$name"]="置換後assetがこのrunの確定upload idではありません: $current_id"
+        append_rollback_error "競合のためassetを安全に復元できません: $name id=$current_id"
         continue
       fi
-      current_id=$(jq -er '.id | numbers' <<<"$current_record")
       if ! delete_asset "$current_id" "$name"; then
         append_rollback_error "復元前の新asset削除に失敗しました: $name"
         continue
@@ -1042,14 +1300,36 @@ rollback_backups() {
 
 report_failure_with_rollback() {
   local original_error=$1
+  local rollback_succeeded=false
   if rollback_backups; then
+    rollback_succeeded=true
     printf '%s\n' "$original_error" >&2
   else
     printf '%s。rollbackにも失敗しました: %s\n' "$original_error" "$rollback_error" >&2
   fi
+  {
+    printf 'original error: %s\n' "$original_error"
+    printf 'rollback succeeded: %s\n' "$rollback_succeeded"
+    printf 'release id: %s\n' "$release_id"
+    printf 'repository: %s\n' "$repository"
+    printf 'tag: %s\n' "$tag"
+    printf 'journal: %s\n' "$journal_path"
+    printf 'manual recovery: journalのexpectedReleaseId、assetId、digestをAPIで再確認して手動復旧してください。別Releaseへrollbackしないでください。\n'
+    if [[ -n "$release_conflict_error" ]]; then
+      printf 'release conflict: %s\n' "$release_conflict_error"
+    fi
+    for name in "${!manual_conflicts[@]}"; do
+      printf 'manual conflict %s: %s\n' "$name" "${manual_conflicts[$name]}"
+    done
+  } >"$recovery_directory/rollback-result.txt"
+  printf 'durable recovery artifact=%s directory=%s journal=%s。Release idとasset idを再確認して手動復旧してください。\n' \
+    "$recovery_artifact_name" "$recovery_directory" "$journal_path" >&2
+  for name in "${!manual_conflicts[@]}"; do
+    printf 'manual conflict: %s: %s\n' "$name" "${manual_conflicts[$name]}" >&2
+  done
   if [[ -n "$release_conflict_error" ]]; then
-    printf '別Releaseへrollbackせず、手動復旧してください: repository=%s tag=%s expectedReleaseId=%s %s journal=%s\n' \
-      "$repository" "$tag" "$release_id" "$release_conflict_error" "$journal_path" >&2
+    printf '別Releaseへrollbackせず手動復旧してください: repository=%s tag=%s expectedReleaseId=%s %s\n' \
+      "$repository" "$tag" "$initial_release_id" "$release_conflict_error" >&2
   fi
 }
 
@@ -1063,6 +1343,9 @@ verify_published_assets() {
   local asset_name
   local asset_size
   local asset_digest
+  if ! reconfirm_mutation_context; then
+    return 1
+  fi
   if ! fetch_remote_assets; then
     return 1
   fi
@@ -1084,6 +1367,11 @@ if ! verify_published_assets; then
   report_failure_with_rollback "$original_error"
   exit 1
 fi
+
+journal_line=$(jq -c -n \
+  --arg event result --arg operation publish --arg result success --argjson release_id "$initial_release_id" \
+  '{event: $event, operation: $operation, result: $result, expectedReleaseId: $release_id}')
+append_journal_line "$journal_line"
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {

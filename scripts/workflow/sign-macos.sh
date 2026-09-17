@@ -160,9 +160,9 @@ if [[ "$p12_fingerprint" != "$certificate_fingerprint" || "$public_fingerprint" 
   printf '%s\n' 'P12または公開証明書のSHA-256 fingerprintが設定と一致しません' >&2
   exit 1
 fi
-p12_subject=$(openssl x509 -in "$certificate_from_p12" -noout -subject -nameopt RFC2253)
-if [[ "$p12_subject" != "subject=CN=$display_name" ]]; then
-  printf 'P12のdisplayNameが設定と一致しません: %s\n' "$p12_subject" >&2
+p12_common_name=$(bash "$central_root/scripts/workflow/extract-certificate-cn.sh" "$certificate_from_p12")
+if [[ "$p12_common_name" != "$display_name" ]]; then
+  printf 'P12のCNがdisplayNameと一致しません: %s\n' "$p12_common_name" >&2
   exit 1
 fi
 

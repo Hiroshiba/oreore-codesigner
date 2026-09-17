@@ -49,6 +49,11 @@ def normalize_member_name(name: str, platform: str) -> tuple[str, tuple[str, ...
             continue
         if part == "..":
             raise ExtractionError(f"archive pathにparent traversalがあります: {name!r}")
+        if platform == "windows":
+            trimmed = part.rstrip(" .")
+            device_name = trimmed.split(".", 1)[0].rstrip(" .").casefold()
+            if device_name in {"con", "prn", "aux", "nul"} or re.fullmatch(r"(?:com|lpt)[1-9]", device_name):
+                raise ExtractionError(f"Windows予約device名をarchive pathに使用できません: {name!r}")
         parts.append(part)
     normalized = "/".join(parts) if parts else "."
     return normalized, tuple(parts)

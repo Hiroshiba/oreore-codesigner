@@ -28,8 +28,8 @@ env:
   CENTRAL_NODE_VERSION: 22.14.0
   CENTRAL_PNPM_VERSION: 10.30.2
   CENTRAL_CURL_MAX_SECONDS: "300"
-  CENTRAL_OPERATION_TIMEOUT_SECONDS: "3000"
-  CENTRAL_ROLLBACK_RESERVE_SECONDS: "300"
+  CENTRAL_OPERATION_TIMEOUT_SECONDS: "2400"
+  CENTRAL_ROLLBACK_RESERVE_SECONDS: "600"
 
 jobs:
   prepare:
@@ -526,11 +526,24 @@ jobs:
       group: signing-source-${{ needs.prepare.outputs.repository }}-${{ needs.prepare.outputs.tag }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 65
     environment: release-publish
     permissions:
       contents: read
     steps:
+      - name: durable recovery directoryを準備
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          recovery_directory="$RUNNER_TEMP/central-publish-recovery-${GITHUB_RUN_ID}-${{ needs.prepare.outputs.app_id }}"
+          if [[ -L "$recovery_directory" ]]; then
+            printf '%s\n' 'recovery directoryがsymlinkです' >&2
+            exit 1
+          fi
+          mkdir -p -- "$recovery_directory"
+          chmod 700 "$recovery_directory"
+          printf 'artifact=central-%s-%s-publish-recovery\nmanual recovery: journalとbackup digestを照合してください。\n' "$GITHUB_RUN_ID" "${{ needs.prepare.outputs.app_id }}" >"$recovery_directory/recovery-info.txt"
+
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -574,6 +587,8 @@ jobs:
       - name: Releaseへassetを公開
         env:
           CENTRAL_APP_TOKEN: ${{ steps.publish-app-token.outputs.token }}
+          CENTRAL_RECOVERY_DIRECTORY: ${{ runner.temp }}/central-publish-recovery-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}
+          CENTRAL_RECOVERY_ARTIFACT_NAME: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-publish-recovery
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -584,3 +599,26 @@ jobs:
             "$RUNNER_TEMP/acquire-source/source-manifest.json" \
             "$RUNNER_TEMP/release-set/build-manifest.json" \
             "$RUNNER_TEMP/release-set/release-assets.tar"
+
+      - name: publish recovery archiveを作成
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          recovery_directory="$RUNNER_TEMP/central-publish-recovery-${GITHUB_RUN_ID}-${{ needs.prepare.outputs.app_id }}"
+          recovery_archive="$RUNNER_TEMP/central-publish-recovery-${GITHUB_RUN_ID}-${{ needs.prepare.outputs.app_id }}.tar"
+          if [[ ! -d "$recovery_directory" || -L "$recovery_directory" ]]; then
+            printf '%s\n' 'recovery directoryがありません' >&2
+            exit 1
+          fi
+          tar -cf "$recovery_archive" -C "$recovery_directory" .
+          [[ -s "$recovery_archive" ]]
+
+      - name: publish recoveryをartifact化
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-publish-recovery
+          if-no-files-found: error
+          retention-days: 90
+          path: ${{ runner.temp }}/central-publish-recovery-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}.tar

@@ -4,17 +4,23 @@
 from __future__ import annotations
 
 import json
+import http.server
+import os
+import socketserver
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
+from shutil import which
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
 EXTRACTOR = ROOT / "safe-extract.py"
 RELEASE_STATE = ROOT / "read-release-state.sh"
+EXTRACT_CERTIFICATE_CN = ROOT / "extract-certificate-cn.sh"
+PUBLISH_SCRIPT = ROOT / "publish-release.sh"
 
 
 def create_archive(path: Path, members: list[tarfile.TarInfo], contents: dict[str, bytes]) -> None:
@@ -211,6 +217,101 @@ class WorkflowFixtureTest(unittest.TestCase):
             create_archive(backslash_archive, [backslash_member], {"dir\\file": b"x"})
             result = run_extract(backslash_archive, root / "backslash-output", "windows")
             self.assertNotEqual(result.returncode, 0)
+
+    def test_windows_reserved_device_components_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:
+            root = Path(directory)
+            names = ("CON.txt", "prn.", "Aux ", "NUL.log", "CoM1", "lpt9.foo", "CON .txt")
+            for index, name in enumerate(names):
+                archive = root / f"reserved-{index}.tar"
+                member = tarfile.TarInfo(f"payload/{name}")
+                create_archive(archive, [member], {member.name: b"x"})
+                result = run_extract(archive, root / f"reserved-{index}-output", "windows")
+                self.assertNotEqual(result.returncode, 0, name)
+
+    def test_certificate_cn_allows_developer_id_subject_attributes(self) -> None:
+        if which("openssl") is None:
+            self.skipTest("opensslがありません")
+        with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:
+            root = Path(directory)
+            certificate = root / "developer-id.pem"
+            key = root / "developer-id.key"
+            result = subprocess.run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-nodes",
+                    "-keyout",
+                    str(key),
+                    "-out",
+                    str(certificate),
+                    "-days",
+                    "1",
+                    "-subj",
+                    "/C=US/O=Apple Inc./OU=ABCDE12345/CN=Developer ID Application: Fixture",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run(
+                [str(EXTRACT_CERTIFICATE_CN), str(certificate)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "Developer ID Application: Fixture")
+
+    def test_publish_direct_200_download_fixture_keeps_body_separate(self) -> None:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = b"direct release asset\n"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+        try:
+            server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        except PermissionError:
+            self.skipTest("test環境でlocalhost listenerを作成できません")
+        with server:
+            port = server.server_address[1]
+            with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:
+                root = Path(directory)
+                header = root / "headers"
+                body = root / "body"
+                process = subprocess.Popen(
+                    [
+                        "curl",
+                        "--silent",
+                        "--show-error",
+                        "--dump-header",
+                        str(header),
+                        "--output",
+                        str(body),
+                        f"http://127.0.0.1:{port}/asset",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env={"PATH": os.environ.get("PATH", ""), "NO_PROXY": "127.0.0.1"},
+                )
+                server.handle_request()
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual(stdout, "")
+                self.assertEqual(body.read_bytes(), b"direct release asset\n")
+                self.assertIn(b"--output \"$api_body_path\"", PUBLISH_SCRIPT.read_bytes())
+                self.assertIn(b'if [[ "$HTTP_STATUS" == 200 ]]', PUBLISH_SCRIPT.read_bytes())
 
     def test_release_false_booleans_are_valid(self) -> None:
         with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:

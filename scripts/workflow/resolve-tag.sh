@@ -64,14 +64,23 @@ api_get() {
   local attempt
   local response_code
   local curl_status
+  local request_timeout
+  local remaining
   for attempt in 1 2 3; do
-    if [[ -n "$deadline_epoch" ]] && (( $(date +%s) + curl_max_seconds >= deadline_epoch )); then
-      printf '%s\n' 'tag解決の時間予算が不足しています' >&2
-      return 1
+    request_timeout=$curl_max_seconds
+    if [[ -n "$deadline_epoch" ]]; then
+      remaining=$((deadline_epoch - $(date +%s)))
+      if (( remaining <= 0 )); then
+        printf '%s\n' 'tag解決の時間予算が不足しています' >&2
+        return 1
+      fi
+      if (( remaining < request_timeout )); then
+        request_timeout=$remaining
+      fi
     fi
     curl_status=0
     response_code=$(curl --silent --show-error \
-      --connect-timeout "$curl_max_seconds" --max-time "$curl_max_seconds" \
+      --connect-timeout "$request_timeout" --max-time "$request_timeout" \
       --header 'Accept: application/vnd.github+json' \
       --header 'X-GitHub-Api-Version: 2022-11-28' \
       --header "@$auth_header_path" \
