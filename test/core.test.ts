@@ -502,6 +502,101 @@ describe("manifest and publish plan", () => {
     ).toThrow();
   });
 
+  it("macOS entitlementsを固定名へコピーして相対参照する", () => {
+    const root = temporaryDirectory();
+    const application = validApplication();
+    application.macos = {
+      ...application.macos,
+      entitlements: "config/nested/entitlements/app.plist",
+      entitlementsInherit: "config/nested/entitlements/inherit.plist"
+    };
+    writeConfiguration(root, application);
+    mkdirSync(join(root, "config/nested/entitlements"), { recursive: true });
+    const entitlements = Buffer.from("app-entitlements");
+    const entitlementsInherit = Buffer.from("inherit-entitlements");
+    writeFileSync(join(root, application.macos.entitlements), entitlements);
+    writeFileSync(join(root, application.macos.entitlementsInherit), entitlementsInherit);
+    writeSource(root, undefined);
+    const contract = validateSource(root, prepareContract(root, "demo-app", "v1.2.3", false), root);
+    const output = join(root, "macos-project");
+    createPackageProject(root, contract, "macos", output);
+    const copiedEntitlementsPath = join(output, "entitlements.plist");
+    const copiedInheritPath = join(output, "entitlements-inherit.plist");
+    expect(existsSync(copiedEntitlementsPath)).toBe(true);
+    expect(existsSync(copiedInheritPath)).toBe(true);
+    expect(readFileSync(copiedEntitlementsPath).equals(entitlements)).toBe(true);
+    expect(readFileSync(copiedInheritPath).equals(entitlementsInherit)).toBe(true);
+    const builderConfig = readFileSync(join(output, "electron-builder.yml"), "utf8");
+    expect(builderConfig).toContain("entitlements: entitlements.plist");
+    expect(builderConfig).toContain("entitlementsInherit: entitlements-inherit.plist");
+    expect(builderConfig).not.toContain(application.macos.entitlements);
+    expect(builderConfig).not.toContain(application.macos.entitlementsInherit);
+  });
+
+  it("欠落、symlink、変更済みcontractのentitlementsを拒否する", () => {
+    const missingRoot = temporaryDirectory();
+    writeConfiguration(missingRoot, validApplication());
+    writeSource(missingRoot, undefined);
+    const missingContract = validateSource(
+      missingRoot,
+      prepareContract(missingRoot, "demo-app", "v1.2.3", false),
+      missingRoot
+    );
+    expect(() =>
+      createPackageProject(missingRoot, missingContract, "macos", join(missingRoot, "output"))
+    ).toThrow(/entitlements/);
+
+    const symlinkRoot = temporaryDirectory();
+    const symlinkApplication = validApplication();
+    symlinkApplication.macos = {
+      ...symlinkApplication.macos,
+      entitlements: "config/nested/app.plist",
+      entitlementsInherit: "config/nested/inherit.plist"
+    };
+    writeConfiguration(symlinkRoot, symlinkApplication);
+    mkdirSync(join(symlinkRoot, "config/nested"), { recursive: true });
+    const externalEntitlements = join(temporaryDirectory(), "external.plist");
+    writeFileSync(externalEntitlements, "external");
+    symlinkSync(externalEntitlements, join(symlinkRoot, symlinkApplication.macos.entitlements));
+    writeFileSync(
+      join(symlinkRoot, symlinkApplication.macos.entitlementsInherit),
+      "inherit-entitlements"
+    );
+    writeSource(symlinkRoot, undefined);
+    const symlinkContract = validateSource(
+      symlinkRoot,
+      prepareContract(symlinkRoot, "demo-app", "v1.2.3", false),
+      symlinkRoot
+    );
+    expect(() =>
+      createPackageProject(symlinkRoot, symlinkContract, "macos", join(symlinkRoot, "output"))
+    ).toThrow(/symlink|entitlements/);
+
+    const changedRoot = temporaryDirectory();
+    const changedApplication = validApplication();
+    writeConfiguration(changedRoot, changedApplication);
+    mkdirSync(join(changedRoot, "config/entitlements"), { recursive: true });
+    writeFileSync(join(changedRoot, changedApplication.macos.entitlements), "app-entitlements");
+    writeFileSync(
+      join(changedRoot, changedApplication.macos.entitlementsInherit),
+      "inherit-entitlements"
+    );
+    writeSource(changedRoot, undefined);
+    const originalContract = validateSource(
+      changedRoot,
+      prepareContract(changedRoot, "demo-app", "v1.2.3", false),
+      changedRoot
+    );
+    const changedConfigApplication = {
+      ...changedApplication,
+      macos: { ...changedApplication.macos, entitlements: "config/entitlements/changed.plist" }
+    };
+    writeConfiguration(changedRoot, changedConfigApplication);
+    expect(() =>
+      createPackageProject(changedRoot, originalContract, "macos", join(changedRoot, "output"))
+    ).toThrow(/中央設定/);
+  });
+
   it("electron-builderのWindows Web package名を厳格にrole化する", () => {
     const root = temporaryDirectory();
     writeConfiguration(root, validApplication());
