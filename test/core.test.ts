@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -18,6 +19,7 @@ import { createPackageProject } from "../src/package-project.js";
 import { createPublishPlan } from "../src/publish-plan.js";
 import { assertReleaseSetComplete, createReleaseManifest } from "../src/release-manifest.js";
 import { validateReleaseTag } from "../src/release-policy.js";
+import { parse as parseYaml } from "yaml";
 import {
   type ApplicationConfig,
   parseApplicationsConfig,
@@ -485,6 +487,12 @@ describe("manifest and publish plan", () => {
     const webDirectory = join(root, "web");
     createPackageProject(root, contract, "windows-nsis", nsisDirectory);
     createPackageProject(root, contract, "windows-nsis-web", webDirectory);
+    const nsisInformation = lstatSync(nsisDirectory, { bigint: true });
+    expect(typeof nsisInformation.dev).toBe("bigint");
+    expect(typeof nsisInformation.ino).toBe("bigint");
+    if (process.platform !== "win32") {
+      expect(nsisInformation.mode & 0o777n).toBe(0o700n);
+    }
     const nsisConfig = readFileSync(join(nsisDirectory, "electron-builder.yml"), "utf8");
     const webConfig = readFileSync(join(webDirectory, "electron-builder.yml"), "utf8");
     expect(nsisConfig).toContain("target: nsis");
@@ -497,11 +505,10 @@ describe("manifest and publish plan", () => {
     expect(nsisConfig).not.toContain("publishAutoUpdate");
     const existingDirectory = join(root, "existing-project");
     mkdirSync(existingDirectory);
-    createPackageProject(root, contract, "windows-nsis", existingDirectory);
-    expect(existsSync(join(existingDirectory, "package.json"))).toBe(true);
-    expect(readdirSync(root).filter((entry) => entry.startsWith(".personal-signing-")).length).toBe(
-      0
+    expect(() => createPackageProject(root, contract, "windows-nsis", existingDirectory)).toThrow(
+      /開始時に存在してはいけません/
     );
+    expect(readdirSync(existingDirectory)).toEqual([]);
     const nonEmptyDirectory = join(root, "non-empty-project");
     mkdirSync(nonEmptyDirectory);
     writeFileSync(join(nonEmptyDirectory, "keep.txt"), "keep");
@@ -539,7 +546,7 @@ describe("manifest and publish plan", () => {
     );
   });
 
-  it("macOS entitlementsを固定名へコピーして相対参照する", () => {
+  it("macOS entitlementsを固定名へコピーして絶対pathで参照する", () => {
     const root = temporaryDirectory();
     const application = validApplication();
     application.macos = {
@@ -564,8 +571,12 @@ describe("manifest and publish plan", () => {
     expect(readFileSync(copiedEntitlementsPath).equals(entitlements)).toBe(true);
     expect(readFileSync(copiedInheritPath).equals(entitlementsInherit)).toBe(true);
     const builderConfig = readFileSync(join(output, "electron-builder.yml"), "utf8");
-    expect(builderConfig).toContain("entitlements: entitlements.plist");
-    expect(builderConfig).toContain("entitlementsInherit: entitlements-inherit.plist");
+    expect(parseYaml(builderConfig)).toMatchObject({
+      mac: {
+        entitlements: copiedEntitlementsPath,
+        entitlementsInherit: copiedInheritPath
+      }
+    });
     expect(builderConfig).not.toContain(application.macos.entitlements);
     expect(builderConfig).not.toContain(application.macos.entitlementsInherit);
   });
@@ -580,11 +591,10 @@ describe("manifest and publish plan", () => {
       missingRoot
     );
     const missingOutput = join(missingRoot, "output");
-    mkdirSync(missingOutput);
     expect(() =>
       createPackageProject(missingRoot, missingContract, "macos", missingOutput)
     ).toThrow(/entitlements/);
-    expect(readdirSync(missingOutput)).toEqual([]);
+    expect(existsSync(missingOutput)).toBe(false);
     expect(
       readdirSync(missingRoot).filter((entry) => entry.startsWith(".personal-signing-")).length
     ).toBe(0);

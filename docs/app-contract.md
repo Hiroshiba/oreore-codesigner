@@ -74,7 +74,7 @@ macOS は初回導入用 DMG と更新用 ZIP を作れる構成にします。
 中央設定の `identity.appId` も、ソースが作るアプリ本体の bundle ID と揃えます。
 アプリ本体だけでなく、Framework、Helper、ネイティブモジュールなどの内部コードにも同じ証明書で署名します。
 既存の entitlements がある場合は中央登録時にも保持し、署名後の起動とアプリ固有機能を実機で確認してください。
-macOS の package project 生成時には、中央の entitlements を生成先の `entitlements.plist` と `entitlements-inherit.plist` へコピーし、生成設定はその相対パスを参照します。
+macOS の package project 生成時には、中央の entitlements を生成先の `entitlements.plist` と `entitlements-inherit.plist` へコピーし、生成設定には生成先内の正規化済み絶対 path を記録します。
 
 Windows は初回導入用 WebSetup と、更新用の通常 NSIS を作れる構成にします。
 両者で appId、NSIS GUID、publisherName を揃え、更新で変更しません。

@@ -29,6 +29,12 @@ GitHub Actions はバージョンタグではなくコミット SHA に固定し
 `electron-builder --prepackaged` はアプリ本体を署名しないため、梱包前に本体と内部の実行可能コードへ署名します。
 公開ジョブだけが公開用トークンを持ちます。
 
+GitHub-hosted の署名 job では、未信頼 source process を同じ job で実行しません。
+source build は別 job で行い、署名 job が受け取るのは safe-extract 済み成果物だけです。
+署名 job はその成果物を実行しません。
+同じ runner account で並行する悪意ある process への防御は CLI の責務外です。
+self-hosted runner では job 単位の OS 隔離を必須にします。
+
 archive は展開前に内容を検査します。
 絶対パス、親ディレクトリへの移動、重複パス、hardlink、特殊ファイル、setuid・setgid を拒否します。
 macOS の内部 symlink は、循環や未解決の参照がなく、展開先の内側に収まる場合だけ許可します。

@@ -1,20 +1,17 @@
 import {
-  existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   writeFileSync
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { stringify as stringifyYaml } from "yaml";
 import { assertReleaseContractCurrent } from "./source-validation.js";
 import type { ReleaseContract } from "./schema.js";
 import { parseReleaseContract } from "./schema.js";
-import { stringify as stringifyYaml } from "yaml";
 import {
   assertNoSymlinkAncestors,
   assertNoSymlinkPath,
@@ -28,71 +25,58 @@ const MAC_ENTITLEMENTS_INHERIT_FILE = "entitlements-inherit.plist";
 
 type CentralFile = { sourcePath: string; contents: Buffer };
 type MacEntitlements = {
-  entitlements: string;
-  entitlementsInherit: string;
+  entitlementsPath: string;
+  entitlementsInheritPath: string;
   entitlementsFile: CentralFile;
   entitlementsInheritFile: CentralFile;
 };
 type ExpectedProjectFile = { name: string; contents: Buffer };
-type DirectoryIdentity = { device: number; inode: number };
-type PrivateDirectory = {
-  path: string;
-  identity: DirectoryIdentity;
-  parentPath: string;
-  parentIdentity: DirectoryIdentity;
-};
-type OutputState = { kind: "absent" } | { kind: "empty-directory"; device: number; inode: number };
+type DirectoryIdentity = { device: bigint; inode: bigint };
 type OutputTarget = {
   requestedPath: string;
   parentRealPath: string;
   parentIdentity: DirectoryIdentity;
   outputPath: string;
-  state: OutputState;
 };
-type BackupState =
-  | { kind: "prepared"; directory: PrivateDirectory; outputPath: string }
-  | { kind: "moved"; directory: PrivateDirectory; outputPath: string };
+type CreatedOutput = { target: OutputTarget; identity: DirectoryIdentity };
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && typeof error.code === "string";
 }
 
-function inspectOutputDirectory(path: string): OutputState {
+function assertDirectoryIdentity(path: string, identity: DirectoryIdentity, message: string): void {
+  assertNoSymlinkPath(path, message);
   let information;
   try {
-    information = lstatSync(path);
+    information = lstatSync(path, { bigint: true });
+  } catch (error) {
+    throw new Error(`${message}: ${path}`, { cause: error });
+  }
+  if (
+    !information.isDirectory() ||
+    information.dev !== identity.device ||
+    information.ino !== identity.inode
+  ) {
+    throw new Error(`${message}: ${path}`);
+  }
+}
+
+function assertOutputAbsent(path: string): void {
+  try {
+    lstatSync(path, { bigint: true });
   } catch (error) {
     if (isErrnoException(error) && error.code === "ENOENT") {
-      return { kind: "absent" };
+      return;
     }
     throw new Error(`output-directoryを確認できません: ${path}`, { cause: error });
   }
-  if (information.isSymbolicLink() || !information.isDirectory()) {
-    throw new Error(`output-directoryが空のディレクトリではありません: ${path}`);
-  }
-  let entries: string[];
-  try {
-    entries = readdirSync(path);
-  } catch (error) {
-    throw new Error(`output-directoryを読み込めません: ${path}`, { cause: error });
-  }
-  if (entries.length > 0) {
-    throw new Error(`output-directoryは空でなければなりません: ${path}`);
-  }
-  return { kind: "empty-directory", device: information.dev, inode: information.ino };
+  throw new Error(`output-directoryは開始時に存在してはいけません: ${path}`);
 }
 
 function prepareOutputTarget(path: string): OutputTarget {
   const requestedPath = resolve(path);
   const parentPath = dirname(requestedPath);
   assertNoSymlinkAncestors(requestedPath, "output-directoryの親pathにsymlinkを指定できません");
-  if (!existsSync(parentPath)) {
-    try {
-      mkdirSync(parentPath, { recursive: true, mode: 0o700 });
-    } catch (error) {
-      throw new Error(`output-directoryの親を作成できません: ${parentPath}`, { cause: error });
-    }
-  }
   assertNoSymlinkPath(parentPath, "output-directoryの親pathにsymlinkを指定できません");
   let parentRealPath: string;
   try {
@@ -101,25 +85,90 @@ function prepareOutputTarget(path: string): OutputTarget {
     throw new Error(`output-directoryの親pathを解決できません: ${parentPath}`, { cause: error });
   }
   assertNoSymlinkPath(parentRealPath, "output-directoryの物理親pathが不正です");
-  const parentInformation = lstatSync(parentRealPath);
+  let parentInformation;
+  try {
+    parentInformation = lstatSync(parentRealPath, { bigint: true });
+  } catch (error) {
+    throw new Error(`output-directoryの親pathを確認できません: ${parentRealPath}`, {
+      cause: error
+    });
+  }
   if (!parentInformation.isDirectory()) {
-    throw new Error(`output-directoryの物理親pathがディレクトリではありません: ${parentRealPath}`);
+    throw new Error(`output-directoryの親pathがディレクトリではありません: ${parentRealPath}`);
   }
   const outputPath = join(parentRealPath, basename(requestedPath));
+  assertOutputAbsent(outputPath);
   return {
     requestedPath,
     parentRealPath,
     parentIdentity: { device: parentInformation.dev, inode: parentInformation.ino },
-    outputPath,
-    state: inspectOutputDirectory(outputPath)
+    outputPath
   };
+}
+
+function assertCreatedOutput(output: CreatedOutput): void {
+  assertDirectoryIdentity(
+    output.target.parentRealPath,
+    output.target.parentIdentity,
+    "output-directoryの親pathが途中で差し替えられました"
+  );
+  assertNoSymlinkPath(output.target.outputPath, "output-directoryにsymlinkを指定できません");
+  let information;
+  try {
+    information = lstatSync(output.target.outputPath, { bigint: true });
+  } catch (error) {
+    throw new Error(`output-directoryを確認できません: ${output.target.outputPath}`, {
+      cause: error
+    });
+  }
+  if (
+    !information.isDirectory() ||
+    information.dev !== output.identity.device ||
+    information.ino !== output.identity.inode
+  ) {
+    throw new Error(`output-directoryが途中で差し替えられました: ${output.target.outputPath}`);
+  }
+  if (process.platform !== "win32" && (information.mode & 0o777n) !== 0o700n) {
+    throw new Error(`output-directoryの権限が不正です: ${output.target.outputPath}`);
+  }
+}
+
+function createOutputDirectory(target: OutputTarget): CreatedOutput {
+  try {
+    mkdirSync(target.outputPath, { mode: 0o700 });
+  } catch (error) {
+    throw new Error(`output-directoryを作成できません: ${target.outputPath}`, { cause: error });
+  }
+  let information;
+  try {
+    information = lstatSync(target.outputPath, { bigint: true });
+  } catch (error) {
+    throw new Error(`作成したoutput-directoryを確認できません: ${target.outputPath}`, {
+      cause: error
+    });
+  }
+  const output: CreatedOutput = {
+    target,
+    identity: { device: information.dev, inode: information.ino }
+  };
+  try {
+    assertCreatedOutput(output);
+    assertRealPathWithin(
+      target.parentRealPath,
+      target.outputPath,
+      "output-directoryが親pathの外を参照しています"
+    );
+    return output;
+  } catch (error) {
+    cleanupCreatedOutput(error, output);
+  }
 }
 
 function assertRegularFile(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
   let information;
   try {
-    information = lstatSync(path);
+    information = lstatSync(path, { bigint: true });
   } catch (error) {
     throw new Error(`${message}: ${path}`, { cause: error });
   }
@@ -136,437 +185,74 @@ function readFileContents(path: string, message: string): Buffer {
   }
 }
 
-function assertDirectoryIdentity(path: string, identity: DirectoryIdentity, message: string): void {
-  assertNoSymlinkPath(path, message);
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
-  if (
-    !information.isDirectory() ||
-    information.dev !== identity.device ||
-    information.ino !== identity.inode
-  ) {
-    throw new Error(`${message}: ${path}`);
-  }
-}
-
-function assertPrivateDirectory(directory: PrivateDirectory): void {
-  assertDirectoryIdentity(
-    directory.parentPath,
-    directory.parentIdentity,
-    "staging directoryの親pathが途中で差し替えられました"
-  );
-  assertNoSymlinkPath(directory.path, "staging directoryにsymlinkを指定できません");
-  let information;
-  try {
-    information = lstatSync(directory.path);
-  } catch (error) {
-    throw new Error(`staging directoryを確認できません: ${directory.path}`, { cause: error });
-  }
-  if (
-    !information.isDirectory() ||
-    information.dev !== directory.identity.device ||
-    information.ino !== directory.identity.inode ||
-    (information.mode & 0o777) !== 0o700
-  ) {
-    throw new Error(`staging directoryの権限または種類が不正です: ${directory.path}`);
-  }
-}
-
-function cleanupCreatedPrivateDirectory(error: unknown, directory: PrivateDirectory): never {
-  try {
-    removePrivateDirectory(directory);
-  } catch (cleanupError) {
-    throw new AggregateError(
-      [error, cleanupError],
-      "staging directoryの検証に失敗しcleanupも完了できません"
-    );
-  }
-  throw error;
-}
-
-function createPrivateDirectory(
-  parentRealPath: string,
-  parentIdentity: DirectoryIdentity,
-  prefix: string
-): PrivateDirectory {
-  assertNoSymlinkPath(parentRealPath, "staging directoryの親pathが不正です");
-  assertDirectoryIdentity(parentRealPath, parentIdentity, "staging directoryの親pathが不正です");
-  let directory: string;
-  try {
-    directory = mkdtempSync(join(parentRealPath, prefix));
-  } catch (error) {
-    throw new Error(`staging directoryを作成できません: ${parentRealPath}`, { cause: error });
-  }
-  let information;
-  try {
-    information = lstatSync(directory);
-  } catch (error) {
-    throw new Error(`staging directoryを確認できません: ${directory}`, { cause: error });
-  }
-  const privateDirectory: PrivateDirectory = {
-    path: resolve(directory),
-    identity: { device: information.dev, inode: information.ino },
-    parentPath: parentRealPath,
-    parentIdentity
-  };
-  try {
-    assertPrivateDirectory(privateDirectory);
-    assertRealPathWithin(parentRealPath, directory, "staging directoryが親path外です");
-    return privateDirectory;
-  } catch (error) {
-    cleanupCreatedPrivateDirectory(error, privateDirectory);
-  }
-}
-
-function writeExclusiveFile(directory: PrivateDirectory, name: string, contents: Buffer): void {
-  assertPrivateDirectory(directory);
-  const path = join(directory.path, name);
+function writeExclusiveFile(output: CreatedOutput, name: string, contents: Buffer): void {
+  assertCreatedOutput(output);
+  const path = join(output.target.outputPath, name);
   try {
     writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
   } catch (error) {
-    throw new Error(`staging fileを書き込めません: ${path}`, { cause: error });
+    throw new Error(`package projectのfileを書き込めません: ${path}`, { cause: error });
   }
-  assertRegularFile(path, "staging fileがregular fileではありません");
-  const writtenContents = readFileContents(path, "staging fileを読み込めません");
+  assertRegularFile(path, "package projectのfileがregular fileではありません");
+  const writtenContents = readFileContents(path, "package projectのfileを読み込めません");
   if (!writtenContents.equals(contents)) {
-    throw new Error(`staging fileのbytesが一致しません: ${path}`);
+    throw new Error(`package projectのfileのbytesが一致しません: ${path}`);
   }
-  assertPrivateDirectory(directory);
+  assertCreatedOutput(output);
 }
 
-function verifyProjectFiles(directory: string, expectedFiles: ExpectedProjectFile[]): void {
-  assertNoSymlinkPath(directory, "staging directoryにsymlinkを指定できません");
-  let information;
-  try {
-    information = lstatSync(directory);
-  } catch (error) {
-    throw new Error(`staging directoryを確認できません: ${directory}`, { cause: error });
-  }
-  if (!information.isDirectory() || (information.mode & 0o777) !== 0o700) {
-    throw new Error(`staging directoryの権限または種類が不正です: ${directory}`);
-  }
+function verifyProjectFiles(output: CreatedOutput, expectedFiles: ExpectedProjectFile[]): void {
+  assertCreatedOutput(output);
   const expectedNames = new Set(expectedFiles.map((file) => file.name));
   if (expectedNames.size !== expectedFiles.length) {
-    throw new Error("staging file名が重複しています");
+    throw new Error("package projectのfile名が重複しています");
   }
   let entries: string[];
   try {
-    entries = readdirSync(directory);
+    entries = readdirSync(output.target.outputPath);
   } catch (error) {
-    throw new Error(`staging directoryを読み込めません: ${directory}`, { cause: error });
+    throw new Error(`package projectのdirectoryを読み込めません: ${output.target.outputPath}`, {
+      cause: error
+    });
   }
   if (entries.length !== expectedFiles.length) {
-    throw new Error(`staging fileの件数が一致しません: ${directory}`);
+    throw new Error(`package projectのfile件数が一致しません: ${output.target.outputPath}`);
   }
   for (const entry of entries) {
     if (!expectedNames.has(entry)) {
-      throw new Error(`想定外のstaging fileです: ${entry}`);
+      throw new Error(`想定外のpackage project fileです: ${entry}`);
     }
   }
   for (const expectedFile of expectedFiles) {
-    const path = join(directory, expectedFile.name);
-    assertRegularFile(path, "staging fileがregular fileではありません");
-    const contents = readFileContents(path, "staging fileを読み込めません");
+    const path = join(output.target.outputPath, expectedFile.name);
+    assertRegularFile(path, "package projectのfileがregular fileではありません");
+    const contents = readFileContents(path, "package projectのfileを読み込めません");
     if (!contents.equals(expectedFile.contents)) {
-      throw new Error(`staging fileのbytesが一致しません: ${path}`);
+      throw new Error(`package projectのfileのbytesが一致しません: ${path}`);
     }
   }
-  assertNoSymlinkPath(directory, "staging directoryにsymlinkを指定できません");
-  let finalInformation;
+  assertCreatedOutput(output);
+}
+
+function removeCreatedOutput(output: CreatedOutput): void {
+  assertCreatedOutput(output);
   try {
-    finalInformation = lstatSync(directory);
+    rmSync(output.target.outputPath, { recursive: true });
   } catch (error) {
-    throw new Error(`staging directoryを確認できません: ${directory}`, { cause: error });
-  }
-  if (!finalInformation.isDirectory() || (finalInformation.mode & 0o777) !== 0o700) {
-    throw new Error(`staging directoryの権限または種類が不正です: ${directory}`);
-  }
-}
-
-function assertOutputStateUnchanged(target: OutputTarget): void {
-  const current = inspectOutputDirectory(target.outputPath);
-  if (target.state.kind === "absent") {
-    if (current.kind !== "absent") {
-      throw new Error(`output-directoryが途中で作成されました: ${target.outputPath}`);
-    }
-    return;
-  }
-  if (
-    current.kind === "absent" ||
-    current.device !== target.state.device ||
-    current.inode !== target.state.inode
-  ) {
-    throw new Error(`output-directoryが途中で差し替えられました: ${target.outputPath}`);
-  }
-}
-
-function assertOutputAbsent(path: string): void {
-  const state = inspectOutputDirectory(path);
-  if (state.kind !== "absent") {
-    throw new Error(`output-directoryが既に存在します: ${path}`);
-  }
-}
-
-function assertStableOutputParent(target: OutputTarget): void {
-  assertNoSymlinkAncestors(
-    target.requestedPath,
-    "output-directoryの親pathにsymlinkを指定できません"
-  );
-  assertDirectoryIdentity(
-    target.parentRealPath,
-    target.parentIdentity,
-    "output-directoryの物理親pathが途中で差し替えられました"
-  );
-  let requestedParentRealPath: string;
-  try {
-    requestedParentRealPath = realpathSync(dirname(target.requestedPath));
-  } catch (error) {
-    throw new Error(`output-directoryの親pathを解決できません: ${target.requestedPath}`, {
+    throw new Error(`作成したoutput-directoryを削除できません: ${output.target.outputPath}`, {
       cause: error
     });
   }
-  if (resolve(requestedParentRealPath) !== resolve(target.parentRealPath)) {
-    throw new Error(`output-directoryの親pathが途中で差し替えられました: ${target.requestedPath}`);
-  }
+  assertOutputAbsent(output.target.outputPath);
 }
 
-function renameDirectory(sourcePath: string, destinationPath: string, message: string): void {
+function cleanupCreatedOutput(error: unknown, output: CreatedOutput): never {
   try {
-    renameSync(sourcePath, destinationPath);
-  } catch (error) {
-    throw new Error(`${message}: ${destinationPath}`, { cause: error });
-  }
-}
-
-function createBackupDirectory(target: OutputTarget): BackupState {
-  const directory = createPrivateDirectory(
-    target.parentRealPath,
-    target.parentIdentity,
-    ".personal-signing-output-backup-"
-  );
-  return {
-    kind: "prepared",
-    directory,
-    outputPath: join(directory.path, "output")
-  };
-}
-
-function assertPublishedOutput(
-  target: OutputTarget,
-  stagingDirectory: PrivateDirectory,
-  expectedFiles: ExpectedProjectFile[]
-): void {
-  assertStableOutputParent(target);
-  assertNoSymlinkPath(target.outputPath, "公開済みoutputにsymlinkを指定できません");
-  assertRealPathWithin(
-    target.parentRealPath,
-    target.outputPath,
-    "公開済みoutputが物理親path外です"
-  );
-  let information;
-  try {
-    information = lstatSync(target.outputPath);
-  } catch (error) {
-    throw new Error(`公開済みoutputを確認できません: ${target.outputPath}`, { cause: error });
-  }
-  if (
-    !information.isDirectory() ||
-    information.dev !== stagingDirectory.identity.device ||
-    information.ino !== stagingDirectory.identity.inode
-  ) {
-    throw new Error(`公開済みoutputのinodeが一致しません: ${target.outputPath}`);
-  }
-  let requestedRealPath: string;
-  let outputRealPath: string;
-  try {
-    requestedRealPath = realpathSync(target.requestedPath);
-    outputRealPath = realpathSync(target.outputPath);
-  } catch (error) {
-    throw new Error(`公開済みoutputのrealpathを確認できません: ${target.outputPath}`, {
-      cause: error
-    });
-  }
-  if (resolve(requestedRealPath) !== resolve(outputRealPath)) {
-    throw new Error(`公開済みoutputのrealpathが一致しません: ${target.requestedPath}`);
-  }
-  verifyProjectFiles(target.outputPath, expectedFiles);
-}
-
-function removePrivateDirectory(directory: PrivateDirectory): void {
-  try {
-    assertDirectoryIdentity(
-      directory.parentPath,
-      directory.parentIdentity,
-      "staging directoryの親pathが途中で差し替えられました"
-    );
-  } catch (error) {
-    throw new Error(`staging directoryの親pathを確認できません: ${directory.parentPath}`, {
-      cause: error
-    });
-  }
-  let information;
-  try {
-    information = lstatSync(directory.path);
-  } catch (error) {
-    if (isErrnoException(error) && error.code === "ENOENT") {
-      return;
-    }
-    throw new Error(`staging directoryを確認できません: ${directory.path}`, { cause: error });
-  }
-  if (
-    information.isSymbolicLink() ||
-    !information.isDirectory() ||
-    information.dev !== directory.identity.device ||
-    information.ino !== directory.identity.inode
-  ) {
-    throw new Error(`staging directoryが予期せず変更されました: ${directory.path}`);
-  }
-  try {
-    rmSync(directory.path, { recursive: true });
-  } catch (error) {
-    throw new Error(`staging directoryを削除できません: ${directory.path}`, { cause: error });
-  }
-}
-
-function removePublishedOutput(
-  target: OutputTarget,
-  stagingDirectory: PrivateDirectory,
-  expectedFiles: ExpectedProjectFile[]
-): void {
-  assertStableOutputParent(target);
-  assertNoSymlinkPath(target.outputPath, "公開済みoutputにsymlinkを指定できません");
-  assertRealPathWithin(
-    target.parentRealPath,
-    target.outputPath,
-    "公開済みoutputが物理親path外です"
-  );
-  let information;
-  try {
-    information = lstatSync(target.outputPath);
-  } catch (error) {
-    throw new Error(`公開済みoutputを確認できません: ${target.outputPath}`, { cause: error });
-  }
-  if (
-    !information.isDirectory() ||
-    information.dev !== stagingDirectory.identity.device ||
-    information.ino !== stagingDirectory.identity.inode
-  ) {
-    throw new Error(`公開済みoutputのinodeが一致しません: ${target.outputPath}`);
-  }
-  verifyProjectFiles(target.outputPath, expectedFiles);
-  try {
-    rmSync(target.outputPath, { recursive: true });
-  } catch (error) {
-    throw new Error(`公開済みoutputを削除できません: ${target.outputPath}`, { cause: error });
-  }
-  assertOutputAbsent(target.outputPath);
-}
-
-function cleanupPublishFailure(
-  error: unknown,
-  stagingDirectory: PrivateDirectory,
-  backup: BackupState | undefined,
-  published: boolean,
-  target: OutputTarget,
-  expectedFiles: ExpectedProjectFile[]
-): never {
-  const cleanupErrors: unknown[] = [];
-  try {
-    removePrivateDirectory(stagingDirectory);
-  } catch (cleanupError) {
-    cleanupErrors.push(cleanupError);
-  }
-  let outputRemoved = !published;
-  if (published) {
-    try {
-      removePublishedOutput(target, stagingDirectory, expectedFiles);
-      outputRemoved = true;
-    } catch (cleanupError) {
-      cleanupErrors.push(cleanupError);
-    }
-  }
-  if (backup !== undefined) {
-    let backupRestored = false;
-    if (backup.kind === "moved" && !published) {
-      try {
-        assertStableOutputParent(target);
-        assertOutputAbsent(target.outputPath);
-        renameDirectory(backup.outputPath, target.outputPath, "元のoutputを復元できません");
-        backupRestored = true;
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
-      }
-    }
-    if (backup.kind === "moved" && published && outputRemoved) {
-      try {
-        assertStableOutputParent(target);
-        assertOutputAbsent(target.outputPath);
-        renameDirectory(backup.outputPath, target.outputPath, "元のoutputを復元できません");
-        backupRestored = true;
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
-      }
-    }
-    if (backup.kind === "prepared" || backupRestored) {
-      try {
-        removePrivateDirectory(backup.directory);
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
-      }
-    }
-  }
-  if (cleanupErrors.length > 0) {
-    throw new AggregateError(
-      [error, ...cleanupErrors],
-      "package project生成に失敗しcleanupも完了できません"
-    );
-  }
-  throw error;
-}
-
-function publishStaging(
-  target: OutputTarget,
-  stagingDirectory: PrivateDirectory,
-  expectedFiles: ExpectedProjectFile[]
-): void {
-  let backup: BackupState | undefined;
-  let published = false;
-  try {
-    assertPrivateDirectory(stagingDirectory);
-    assertOutputStateUnchanged(target);
-    if (target.state.kind === "empty-directory") {
-      backup = createBackupDirectory(target);
-      assertStableOutputParent(target);
-      assertOutputStateUnchanged(target);
-      assertOutputAbsent(backup.outputPath);
-      renameDirectory(target.outputPath, backup.outputPath, "既存outputを退避できません");
-      backup = { kind: "moved", directory: backup.directory, outputPath: backup.outputPath };
-    }
-    assertStableOutputParent(target);
-    assertOutputAbsent(target.outputPath);
-    renameDirectory(stagingDirectory.path, target.outputPath, "stagingをoutputへ公開できません");
-    published = true;
-    assertPublishedOutput(target, stagingDirectory, expectedFiles);
-    if (backup !== undefined) {
-      removePrivateDirectory(backup.directory);
-      backup = undefined;
-    }
-  } catch (error) {
-    cleanupPublishFailure(error, stagingDirectory, backup, published, target, expectedFiles);
-  }
-}
-
-function cleanupBuildFailure(error: unknown, stagingDirectory: PrivateDirectory): never {
-  try {
-    removePrivateDirectory(stagingDirectory);
+    removeCreatedOutput(output);
   } catch (cleanupError) {
     throw new AggregateError(
       [error, cleanupError],
-      "package project生成に失敗しstagingも削除できません"
+      "package project生成に失敗し作成したoutput-directoryも削除できません"
     );
   }
   throw error;
@@ -586,17 +272,21 @@ function readCentralFile(rootDirectory: string, centralPath: string): CentralFil
   };
 }
 
-function readMacEntitlements(rootDirectory: string, contract: ReleaseContract): MacEntitlements {
-  const entitlements = readCentralFile(rootDirectory, contract.application.macos.entitlements);
-  const entitlementsInherit = readCentralFile(
+function readMacEntitlements(
+  rootDirectory: string,
+  contract: ReleaseContract,
+  outputPath: string
+): MacEntitlements {
+  const entitlementsFile = readCentralFile(rootDirectory, contract.application.macos.entitlements);
+  const entitlementsInheritFile = readCentralFile(
     rootDirectory,
     contract.application.macos.entitlementsInherit
   );
   return {
-    entitlements: MAC_ENTITLEMENTS_FILE,
-    entitlementsInherit: MAC_ENTITLEMENTS_INHERIT_FILE,
-    entitlementsFile: entitlements,
-    entitlementsInheritFile: entitlementsInherit
+    entitlementsPath: resolve(outputPath, MAC_ENTITLEMENTS_FILE),
+    entitlementsInheritPath: resolve(outputPath, MAC_ENTITLEMENTS_INHERIT_FILE),
+    entitlementsFile,
+    entitlementsInheritFile
   };
 }
 
@@ -668,8 +358,8 @@ function macBuilderConfig(
         }
       ],
       artifactName: `${artifactName}-\${version}-\${arch}.\${ext}`,
-      entitlements: macEntitlements.entitlements,
-      entitlementsInherit: macEntitlements.entitlementsInherit,
+      entitlements: macEntitlements.entitlementsPath,
+      entitlementsInherit: macEntitlements.entitlementsInheritPath,
       hardenedRuntime: true,
       gatekeeperAssess: false
     }
@@ -716,11 +406,15 @@ function windowsBuilderConfig(
   };
 }
 
-function buildStagingProject(
+function writeNewFile(output: CreatedOutput, name: string, contents: string): void {
+  writeExclusiveFile(output, name, Buffer.from(contents));
+}
+
+function buildProject(
   rootDirectory: string,
   contract: ReleaseContract,
   target: PackageProjectTarget,
-  stagingDirectory: PrivateDirectory
+  output: CreatedOutput
 ): ExpectedProjectFile[] {
   const packageContents = JSON.stringify(packageJson(contract), null, 2);
   if (packageContents === undefined) {
@@ -728,37 +422,31 @@ function buildStagingProject(
   }
   const packageFile = { name: "package.json", contents: Buffer.from(`${packageContents}\n`) };
   if (target === "macos") {
-    const macEntitlements = readMacEntitlements(rootDirectory, contract);
+    const macEntitlements = readMacEntitlements(rootDirectory, contract, output.target.outputPath);
     const builderContents = stringifyYaml(macBuilderConfig(contract, macEntitlements));
     const expectedFiles: ExpectedProjectFile[] = [
       packageFile,
       { name: "electron-builder.yml", contents: Buffer.from(builderContents) },
       {
-        name: macEntitlements.entitlements,
+        name: MAC_ENTITLEMENTS_FILE,
         contents: macEntitlements.entitlementsFile.contents
       },
       {
-        name: macEntitlements.entitlementsInherit,
+        name: MAC_ENTITLEMENTS_INHERIT_FILE,
         contents: macEntitlements.entitlementsInheritFile.contents
       }
     ];
-    writeNewFile(stagingDirectory, packageFile.name, `${packageContents}\n`);
-    writeNewFile(stagingDirectory, "electron-builder.yml", builderContents);
+    writeNewFile(output, packageFile.name, `${packageContents}\n`);
+    writeNewFile(output, "electron-builder.yml", builderContents);
+    writeExclusiveFile(output, MAC_ENTITLEMENTS_FILE, macEntitlements.entitlementsFile.contents);
     writeExclusiveFile(
-      stagingDirectory,
-      macEntitlements.entitlements,
-      macEntitlements.entitlementsFile.contents
-    );
-    writeExclusiveFile(
-      stagingDirectory,
-      macEntitlements.entitlementsInherit,
+      output,
+      MAC_ENTITLEMENTS_INHERIT_FILE,
       macEntitlements.entitlementsInheritFile.contents
     );
     assertCentralFileUnchanged(macEntitlements.entitlementsFile);
     assertCentralFileUnchanged(macEntitlements.entitlementsInheritFile);
-    assertPrivateDirectory(stagingDirectory);
-    verifyProjectFiles(stagingDirectory.path, expectedFiles);
-    assertPrivateDirectory(stagingDirectory);
+    verifyProjectFiles(output, expectedFiles);
     return expectedFiles;
   }
   const builderContents = stringifyYaml(windowsBuilderConfig(contract, target));
@@ -766,16 +454,10 @@ function buildStagingProject(
     packageFile,
     { name: "electron-builder.yml", contents: Buffer.from(builderContents) }
   ];
-  writeNewFile(stagingDirectory, packageFile.name, `${packageContents}\n`);
-  writeNewFile(stagingDirectory, "electron-builder.yml", builderContents);
-  assertPrivateDirectory(stagingDirectory);
-  verifyProjectFiles(stagingDirectory.path, expectedFiles);
-  assertPrivateDirectory(stagingDirectory);
+  writeNewFile(output, packageFile.name, `${packageContents}\n`);
+  writeNewFile(output, "electron-builder.yml", builderContents);
+  verifyProjectFiles(output, expectedFiles);
   return expectedFiles;
-}
-
-function writeNewFile(directory: PrivateDirectory, name: string, contents: string): void {
-  writeExclusiveFile(directory, name, Buffer.from(contents));
 }
 
 function isPackageProjectTarget(value: string): value is PackageProjectTarget {
@@ -824,25 +506,30 @@ export function createPackageProject(
   const releaseContract = assertReleaseContractCurrent(rootDirectory, releaseContractValue);
   const parsedContract = parseReleaseContract(releaseContract);
   const outputTarget = prepareOutputTarget(outputDirectory);
-  const stagingDirectory = createPrivateDirectory(
-    outputTarget.parentRealPath,
-    outputTarget.parentIdentity,
-    ".personal-signing-project-"
-  );
-  let publishingStarted = false;
+  const output = createOutputDirectory(outputTarget);
   try {
-    const expectedFiles = buildStagingProject(
-      rootDirectory,
-      parsedContract,
-      targetValue,
-      stagingDirectory
+    const expectedFiles = buildProject(rootDirectory, parsedContract, targetValue, output);
+    assertCreatedOutput(output);
+    assertRealPathWithin(
+      output.target.parentRealPath,
+      output.target.outputPath,
+      "公開済みoutputが物理親path外です"
     );
-    publishingStarted = true;
-    publishStaging(outputTarget, stagingDirectory, expectedFiles);
-  } catch (error) {
-    if (!publishingStarted) {
-      cleanupBuildFailure(error, stagingDirectory);
+    let requestedRealPath: string;
+    let outputRealPath: string;
+    try {
+      requestedRealPath = realpathSync(output.target.requestedPath);
+      outputRealPath = realpathSync(output.target.outputPath);
+    } catch (error) {
+      throw new Error(`公開済みoutputのrealpathを確認できません: ${output.target.outputPath}`, {
+        cause: error
+      });
     }
-    throw error;
+    if (resolve(requestedRealPath) !== resolve(outputRealPath)) {
+      throw new Error(`公開済みoutputのrealpathが一致しません: ${output.target.requestedPath}`);
+    }
+    verifyProjectFiles(output, expectedFiles);
+  } catch (error) {
+    cleanupCreatedOutput(error, output);
   }
 }
