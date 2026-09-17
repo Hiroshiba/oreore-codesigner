@@ -4,10 +4,12 @@ import { assertReleaseContractCurrent } from "./source-validation.js";
 import type { ReleaseContract } from "./schema.js";
 import { parseReleaseContract } from "./schema.js";
 import { stringify as stringifyYaml } from "yaml";
+import { assertNoSymlinkAncestors } from "./path-safety.js";
 
 export type PackageProjectTarget = "macos" | "windows-nsis" | "windows-nsis-web";
 
 function assertEmptyDirectory(path: string): void {
+  assertNoSymlinkAncestors(path, "output-directoryの親pathにsymlinkを指定できません");
   if (!existsSync(path)) {
     mkdirSync(path, { recursive: true });
     return;
@@ -62,6 +64,7 @@ function builderConfig(
   target: PackageProjectTarget
 ): Record<string, unknown> {
   const common = commonBuilderConfig(contract);
+  const artifactName = contract.application.identity.artifactName;
   if (target === "macos") {
     return {
       ...common,
@@ -76,7 +79,7 @@ function builderConfig(
             arch: [contract.application.macos.architecture]
           }
         ],
-        artifactName: "${productName}-${version}-${arch}.${ext}",
+        artifactName: `${artifactName}-\${version}-\${arch}.\${ext}`,
         entitlements: contract.application.macos.entitlements,
         entitlementsInherit: contract.application.macos.entitlementsInherit,
         hardenedRuntime: true,
@@ -100,7 +103,7 @@ function builderConfig(
       win: windows,
       nsis: {
         guid: contract.application.windows.guid,
-        artifactName: "${productName} Setup ${version}.${ext}"
+        artifactName: `${artifactName}-Setup-\${version}.\${ext}`
       }
     };
   }
@@ -109,7 +112,7 @@ function builderConfig(
     win: windows,
     nsisWeb: {
       guid: contract.application.windows.guid,
-      artifactName: "${productName} Web Setup ${version}.${ext}"
+      artifactName: `${artifactName}-WebSetup-\${version}.\${ext}`
     }
   };
 }

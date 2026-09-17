@@ -12,6 +12,7 @@ import {
 } from "./schema.js";
 import { validateReleaseTag, validateTagForPrepare } from "./release-policy.js";
 import { z } from "zod";
+import { assertNoSymlinkPath, assertRealPathWithin } from "./path-safety.js";
 
 const rootSourcePackageSchema = z
   .object({
@@ -46,6 +47,19 @@ function assertRegularSourceFile(path: string, message: string, rejectEmpty: boo
   }
 }
 
+function assertSourceDirectory(path: string, message: string): void {
+  assertNoSymlinkPath(path, message);
+  let information;
+  try {
+    information = lstatSync(path);
+  } catch (error) {
+    throw new Error(`${message}: ${path}`, { cause: error });
+  }
+  if (!information.isDirectory()) {
+    throw new Error(`${message}: ${path}`);
+  }
+}
+
 function readSourcePackage<T extends z.ZodType<unknown>>(path: string, schema: T): z.output<T> {
   const result = schema.safeParse(loadJsonFile(path));
   if (!result.success) {
@@ -54,18 +68,49 @@ function readSourcePackage<T extends z.ZodType<unknown>>(path: string, schema: T
   return result.data;
 }
 
-function assertExactDependency(
+function hasDependency(
   packageJson: TargetSourcePackage,
-  dependencyName: string,
-  expectedVersion: string,
-  devDependenciesAllowed: boolean
-): void {
-  const dependencyVersion = packageJson.dependencies?.[dependencyName];
-  const devDependencyVersion = packageJson.devDependencies?.[dependencyName];
-  const dependencyMatches = dependencyVersion === expectedVersion;
-  const devDependencyMatches = devDependenciesAllowed && devDependencyVersion === expectedVersion;
-  if (!dependencyMatches && !devDependencyMatches) {
-    throw new Error(`${dependencyName}は${expectedVersion}のexact dependencyが必要です`);
+  field: "dependencies" | "devDependencies",
+  name: string
+): boolean {
+  const dependencies = packageJson[field];
+  return dependencies !== undefined && Object.hasOwn(dependencies, name);
+}
+
+function dependencyVersion(
+  packageJson: TargetSourcePackage,
+  field: "dependencies" | "devDependencies",
+  name: string
+): string | undefined {
+  return packageJson[field]?.[name];
+}
+
+function assertElectronDependencies(packageJson: TargetSourcePackage): void {
+  const builderInDependencies = hasDependency(packageJson, "dependencies", "electron-builder");
+  const builderInDevDependencies = hasDependency(
+    packageJson,
+    "devDependencies",
+    "electron-builder"
+  );
+  if (builderInDependencies === builderInDevDependencies) {
+    throw new Error("electron-builderはdependenciesまたはdevDependenciesの一方だけに必要です");
+  }
+  const builderField = builderInDependencies ? "dependencies" : "devDependencies";
+  if (dependencyVersion(packageJson, builderField, "electron-builder") !== "26.16.1") {
+    throw new Error("electron-builderは26.16.1のexact dependencyが必要です");
+  }
+
+  const updaterInDependencies = hasDependency(packageJson, "dependencies", "electron-updater");
+  const updaterInDevDependencies = hasDependency(
+    packageJson,
+    "devDependencies",
+    "electron-updater"
+  );
+  if (!updaterInDependencies || updaterInDevDependencies) {
+    throw new Error("electron-updaterはdependenciesだけに必要です");
+  }
+  if (dependencyVersion(packageJson, "dependencies", "electron-updater") !== "6.8.9") {
+    throw new Error("electron-updaterは6.8.9のexact dependencyが必要です");
   }
 }
 
@@ -178,7 +223,9 @@ function validateSourceWithRoot(
   sourceDirectory: string
 ): ReleaseContract {
   const preparedContract = assertPreparedContractCurrent(rootDirectory, preparedContractValue);
+  assertSourceDirectory(sourceDirectory, "source directoryがディレクトリではありません");
   const sourceRoot = resolve(sourceDirectory);
+  assertRealPathWithin(sourceRoot, sourceRoot, "source rootの実体pathを検証できません");
   const rootPackagePath = join(sourceRoot, "package.json");
   const lockfilePath = join(sourceRoot, "pnpm-lock.yaml");
   assertRegularSourceFile(rootPackagePath, "source rootのpackage.jsonがありません", false);
@@ -197,6 +244,13 @@ function validateSourceWithRoot(
     preparedContract.application.workingDirectory,
     "package.json"
   );
+  const targetDirectory = resolve(sourceRoot, preparedContract.application.workingDirectory);
+  assertSourceDirectory(targetDirectory, "workingDirectoryがディレクトリではありません");
+  assertRealPathWithin(
+    sourceRoot,
+    targetDirectory,
+    "workingDirectoryがsource root外を参照しています"
+  );
   assertRegularSourceFile(targetPackagePath, "workingDirectoryのpackage.jsonがありません", false);
   const targetPackage = readSourcePackage(targetPackagePath, targetSourcePackageSchema);
   if (targetPackage.name !== preparedContract.application.packageName) {
@@ -204,8 +258,7 @@ function validateSourceWithRoot(
   }
   parsePnpmVersion(preparedContract.application.pnpmVersion);
   assertBuildScripts(targetPackage, preparedContract.application);
-  assertExactDependency(targetPackage, "electron-builder", "26.16.1", true);
-  assertExactDependency(targetPackage, "electron-updater", "6.8.9", false);
+  assertElectronDependencies(targetPackage);
   validateReleaseTag(
     preparedContract.application.release,
     preparedContract.tag,

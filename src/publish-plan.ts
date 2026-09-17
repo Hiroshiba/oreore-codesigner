@@ -12,12 +12,12 @@ import {
   parseRemoteAssets
 } from "./schema.js";
 import { assertManifestAssetNames } from "./release-manifest.js";
+import { createReleaseManifest } from "./release-manifest.js";
 import { assertReleaseContractCurrent } from "./source-validation.js";
+import { canonicalJson } from "./canonical-json.js";
 
 function isMetadataRole(role: ReleaseManifest["assets"][number]["role"]): boolean {
-  return (
-    role === "macos-metadata" || role === "windows-metadata" || role === "windows-web-metadata"
-  );
+  return role === "macos-metadata" || role === "windows-metadata";
 }
 
 function assertContractMatch(contract: ReleaseContract, manifest: ReleaseManifest): void {
@@ -96,10 +96,15 @@ function createPublishPlanForRoot(
   rootDirectory: string,
   releaseContractValue: unknown,
   manifestValue: unknown,
-  remoteAssetsValue: unknown
+  remoteAssetsValue: unknown,
+  assetsDirectory: string
 ): PublishPlan {
   const contract = assertReleaseContractCurrent(rootDirectory, releaseContractValue);
   const manifest = parseReleaseManifest(manifestValue);
+  const actualManifest = createReleaseManifest(rootDirectory, contract, assetsDirectory);
+  if (canonicalJson(manifest) !== canonicalJson(actualManifest)) {
+    throw new Error("保存済みmanifestが実assetまたはmetadataと一致しません");
+  }
   assertContractMatch(contract, manifest);
   assertManifestAssetNames(contract, manifest);
   const remoteAssets = parseRemoteAssets(remoteAssetsValue);
@@ -136,25 +141,22 @@ export function createPublishPlan(
   rootDirectory: string,
   releaseContractValue: unknown,
   manifestValue: unknown,
-  remoteAssetsValue: unknown
+  remoteAssetsValue: unknown,
+  assetsDirectory: string
 ): PublishPlan;
 export function createPublishPlan(
+  rootDirectory: string,
   releaseContractValue: unknown,
   manifestValue: unknown,
-  remoteAssetsValue: unknown
-): PublishPlan;
-export function createPublishPlan(
-  first: unknown,
-  second: unknown,
-  third: unknown,
-  fourth?: unknown
+  remoteAssetsValue: unknown,
+  assetsDirectory: string
 ): PublishPlan {
-  if (fourth === undefined) {
-    return createPublishPlanForRoot(process.cwd(), first, second, third);
-  }
-  if (typeof first !== "string") {
-    throw new Error("root directoryが不正です");
-  }
-  const contract = parseReleaseContract(second);
-  return createPublishPlanForRoot(first, contract, third, fourth);
+  const contract = parseReleaseContract(releaseContractValue);
+  return createPublishPlanForRoot(
+    rootDirectory,
+    contract,
+    manifestValue,
+    remoteAssetsValue,
+    assetsDirectory
+  );
 }

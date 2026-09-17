@@ -8,6 +8,7 @@ import {
   parseApplicationsConfig,
   parseSigningConfig
 } from "./schema.js";
+import { assertNoSymlinkAncestors, assertNoSymlinkPath } from "./path-safety.js";
 
 function readJsonFile(path: string): unknown {
   assertRegularFile(path, "JSONファイルがありません");
@@ -25,6 +26,7 @@ function readJsonFile(path: string): unknown {
 }
 
 function assertRegularFile(path: string, message: string): void {
+  assertNoSymlinkPath(path, message);
   let information;
   try {
     information = lstatSync(path);
@@ -104,6 +106,7 @@ export function writeJsonFile(path: string, value: unknown): void {
   if (contents === undefined) {
     throw new Error(`JSONを生成できません: ${path}`);
   }
+  assertNoSymlinkAncestors(path, "出力先の親pathにsymlinkを指定できません");
   try {
     lstatSync(path);
     throw new Error(`出力先は存在してはいけません: ${path}`);

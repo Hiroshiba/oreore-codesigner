@@ -2,13 +2,15 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { ReleaseContract, ReleaseManifest, ReleaseAsset } from "./schema.js";
-import { parseReleaseContract, parseReleaseManifest } from "./schema.js";
-import { assertReleaseContractCurrent } from "./source-validation.js";
 import { z } from "zod";
+import type { ReleaseAsset, ReleaseContract, ReleaseManifest } from "./schema.js";
+import { parseReleaseContract, parseReleaseManifest } from "./schema.js";
+import { assertNoSymlinkPath } from "./path-safety.js";
+import { assertReleaseContractCurrent } from "./source-validation.js";
 
 type AssetRole = ReleaseAsset["role"];
-type MetadataRole = "macos-metadata" | "windows-metadata" | "windows-web-metadata";
+type MetadataRole = "macos-metadata" | "windows-metadata";
+type ManifestMetadata = NonNullable<ReleaseManifest["metadata"]>[number];
 
 const requiredRoles: AssetRole[] = [
   "macos-zip",
@@ -25,10 +27,14 @@ const metadataUrlSchema = z
   .string()
   .min(1, "metadata URLが空です")
   .refine(
-    (value) => !value.startsWith("/") && !value.includes("\\") && !value.includes(":"),
+    (value) =>
+      !value.startsWith("/") &&
+      !value.includes("\\") &&
+      !value.includes(":") &&
+      !value.includes("..") &&
+      !value.includes("/"),
     "metadata URLが不正です"
-  )
-  .refine((value) => !value.includes("://") && !value.includes(".."), "metadata URLが不正です");
+  );
 const metadataSha512Schema = z
   .string()
   .regex(/^(?:[0-9A-Fa-f]{128}|[A-Za-z0-9+/]{86}==)$/, "metadata sha512が不正です");
@@ -40,21 +46,12 @@ const metadataFileSchema = z
     blockMapSize: z.number().int().nonnegative().optional()
   })
   .strict();
-const metadataPackageSchema = z
-  .object({
-    file: metadataUrlSchema,
-    path: metadataUrlSchema,
-    size: z.number().int().nonnegative(),
-    sha512: metadataSha512Schema
-  })
-  .strict();
 const updateMetadataSchema = z
   .object({
     version: z.string().min(1),
     files: z.array(metadataFileSchema).min(1),
     path: metadataUrlSchema,
     sha512: metadataSha512Schema,
-    packages: z.record(metadataPackageSchema).optional(),
     releaseDate: z.string().optional(),
     stagingPercentage: z.number().optional(),
     minimumSystemVersion: z.string().optional(),
@@ -70,7 +67,17 @@ function channelMetadataName(contract: ReleaseContract, suffix: string): string 
 }
 
 function sanitizedPackageName(contract: ReleaseContract): string {
-  return contract.application.packageName.replace(/[\\/:*?"<>|]/gu, "");
+  const sanitized = contract.application.packageName
+    .replace(/[\\/:*?"<>|]/gu, "")
+    .replace(/^\.+$/u, "")
+    .replace(/[. ]+$/u, "");
+  if (
+    sanitized.length === 0 ||
+    /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?$/iu.test(sanitized)
+  ) {
+    throw new Error("packageNameからWeb package filenameを生成できません");
+  }
+  return sanitized.slice(0, 255);
 }
 
 function expectedNames(contract: ReleaseContract): {
@@ -82,24 +89,21 @@ function expectedNames(contract: ReleaseContract): {
   windowsWebSetup: string;
   windowsWebPackage: string;
   windowsMetadata: string;
-  windowsWebMetadata: string;
 } {
-  const productName = contract.application.identity.productName;
+  const artifactName = contract.application.identity.artifactName;
   const version = contract.version;
-  const architecture = contract.application.macos.architecture;
+  const macArchitecture = contract.application.macos.architecture;
   const windowsArchitecture = contract.application.windows.architecture;
-  const windowsNsis = `${productName} Setup ${version}.exe`;
-  const windowsWebSetup = `${productName} Web Setup ${version}.exe`;
+  const windowsNsis = `${artifactName}-Setup-${version}.exe`;
   return {
-    macosZip: `${productName}-${version}-${architecture}.zip`,
-    macosDmg: `${productName}-${version}-${architecture}.dmg`,
+    macosZip: `${artifactName}-${version}-${macArchitecture}.zip`,
+    macosDmg: `${artifactName}-${version}-${macArchitecture}.dmg`,
     macosMetadata: channelMetadataName(contract, "-mac"),
     windowsNsis,
     windowsNsisBlockmap: `${windowsNsis}.blockmap`,
-    windowsWebSetup,
+    windowsWebSetup: `${artifactName}-WebSetup-${version}.exe`,
     windowsWebPackage: `${sanitizedPackageName(contract)}-${version}-${windowsArchitecture}.nsis.7z`,
-    windowsMetadata: channelMetadataName(contract, ""),
-    windowsWebMetadata: channelMetadataName(contract, "-web")
+    windowsMetadata: channelMetadataName(contract, "")
   };
 }
 
@@ -116,8 +120,7 @@ export function assertManifestAssetNames(contractValue: unknown, manifestValue: 
     "windows-nsis-blockmap": names.windowsNsisBlockmap,
     "windows-web-setup": names.windowsWebSetup,
     "windows-web-package": names.windowsWebPackage,
-    "windows-metadata": names.windowsMetadata,
-    "windows-web-metadata": names.windowsWebMetadata
+    "windows-metadata": names.windowsMetadata
   };
   const roles = new Set<AssetRole>();
   const namesSeen = new Set<string>();
@@ -175,9 +178,6 @@ function classifyAsset(name: string, contract: ReleaseContract): AssetRole {
   if (name === names.windowsMetadata) {
     return "windows-metadata";
   }
-  if (name === names.windowsWebMetadata) {
-    return "windows-web-metadata";
-  }
   throw new Error(`中央設定から導出できないrelease asset filenameです: ${name}`);
 }
 
@@ -198,8 +198,9 @@ function hashFile(path: string): { digest: string; sha512: string; size: number 
 }
 
 function assertAssetsDirectory(path: string): void {
+  assertNoSymlinkPath(path, "assets-directoryにsymlinkを指定できません");
   const information = lstatSync(path);
-  if (information.isSymbolicLink() || !information.isDirectory()) {
+  if (!information.isDirectory()) {
     throw new Error(`assets-directoryがディレクトリではありません: ${path}`);
   }
 }
@@ -208,12 +209,13 @@ function assertSha512Matches(actual: string, expected: string, assetName: string
   if (actual === expected) {
     return;
   }
-  if (/^[0-9A-Fa-f]{128}$/u.test(actual) && actual.toLowerCase() === expected.toLowerCase()) {
-    return;
+  if (/^[0-9A-Fa-f]{128}$/u.test(actual)) {
+    if (actual.toLowerCase() === Buffer.from(expected, "base64").toString("hex")) {
+      return;
+    }
   }
   if (/^[0-9A-Fa-f]{128}$/u.test(expected)) {
-    const expectedBase64 = Buffer.from(expected, "hex").toString("base64");
-    if (expectedBase64 === actual) {
+    if (Buffer.from(expected, "hex").toString("base64") === actual) {
       return;
     }
   }
@@ -269,15 +271,22 @@ function assertMetadataReferences(
       throw new Error(`metadataのfiles URLが重複しています: ${file.url}`);
     }
     fileNamesSeen.add(file.url);
-    assertMetadataAsset(assetMap, file.url, file.size, file.sha512);
+    const asset = assertMetadataAsset(assetMap, file.url, file.size, file.sha512);
+    if (file.blockMapSize !== undefined) {
+      const blockmap = assetMap.get(`${asset.name}.blockmap`);
+      if (blockmap === undefined || blockmap.role !== "windows-nsis-blockmap") {
+        throw new Error(`metadata blockmapが通常NSISに対応していません: ${asset.name}`);
+      }
+      if (blockmap.size !== file.blockMapSize) {
+        throw new Error(`metadata blockMapSizeがassetと一致しません: ${asset.name}`);
+      }
+    }
     fileNames.push(file.url);
   }
-  assertMetadataAsset(
-    assetMap,
-    metadata.path,
-    assetMap.get(metadata.path)?.size ?? 0,
-    metadata.sha512
-  );
+  if (!fileNames.includes(metadata.path)) {
+    throw new Error("metadataのpathがfilesにありません");
+  }
+  assertMetadataAsset(assetMap, metadata.path, undefined, metadata.sha512);
   if (metadata.version !== contract.version) {
     throw new Error(`metadata versionがcontractと一致しません: ${metadata.version}`);
   }
@@ -304,51 +313,20 @@ function assertMetadataReferences(
         throw new Error("Windows metadataが通常NSIS以外を参照しています");
       }
     }
-    if (metadata.packages !== undefined) {
-      throw new Error("通常NSIS metadataにpackagesは指定できません");
-    }
   }
-  if (metadataRole === "windows-web-metadata") {
-    if (metadata.path !== names.windowsWebSetup || !fileNames.includes(names.windowsWebSetup)) {
-      throw new Error("Windows Web metadataはWebSetupを参照しなければなりません");
-    }
-    for (const name of fileNames) {
-      if (assetMap.get(name)?.role !== "windows-web-setup") {
-        throw new Error("Windows Web metadataがWebSetup以外のinstallerを参照しています");
-      }
-    }
-    const packages = metadata.packages;
-    if (packages === undefined) {
-      throw new Error("Windows Web metadataにpackagesがありません");
-    }
-    const packageNames = Object.entries(packages);
-    if (packageNames.length === 0) {
-      throw new Error("Windows Web metadataのpackagesが空です");
-    }
-    for (const [architecture, packageInfo] of packageNames) {
-      if (architecture !== contract.application.windows.architecture) {
-        throw new Error(`Windows Web metadataのarchitectureが不正です: ${architecture}`);
-      }
-      if (packageInfo.file !== packageInfo.path || packageInfo.file !== names.windowsWebPackage) {
-        throw new Error("Windows Web metadataのpackage filenameが不正です");
-      }
-      assertMetadataAsset(assetMap, packageInfo.file, packageInfo.size, packageInfo.sha512);
-      if (assetMap.get(packageInfo.file)?.role !== "windows-web-package") {
-        throw new Error("Windows Web metadataがWeb package以外を参照しています");
-      }
-    }
-  }
-  const packageNames =
-    metadata.packages === undefined
-      ? []
-      : Object.values(metadata.packages).map((packageInfo) => packageInfo.file);
-  return { path: metadata.path, files: [...fileNames, ...packageNames] };
+  return { path: metadata.path, files: fileNames };
 }
 
 function assertBlockmapPair(manifest: ReleaseManifest): void {
   const installer = manifest.assets.find((asset) => asset.role === "windows-nsis");
   const blockmap = manifest.assets.find((asset) => asset.role === "windows-nsis-blockmap");
-  if (installer === undefined || blockmap === undefined) {
+  if (installer === undefined && blockmap === undefined) {
+    return;
+  }
+  if (installer === undefined) {
+    throw new Error("通常NSIS blockmapとinstallerは同時に必要です");
+  }
+  if (blockmap === undefined) {
     return;
   }
   if (blockmap.name !== `${installer.name}.blockmap`) {
@@ -391,8 +369,7 @@ export function createReleaseManifest(
   }
   const contract = assertReleaseContractCurrent(rootDirectory, releaseContractValue);
   assertAssetsDirectory(assetsDirectory);
-  const entries = readdirSync(assetsDirectory, { withFileTypes: true });
-  entries.sort((left, right) => {
+  const entries = readdirSync(assetsDirectory, { withFileTypes: true }).sort((left, right) => {
     if (left.name < right.name) {
       return -1;
     }
@@ -419,6 +396,7 @@ export function createReleaseManifest(
     }
     roles.add(role);
     const filePath = join(assetsDirectory, entry.name);
+    assertNoSymlinkPath(filePath, "asset pathにsymlinkを指定できません");
     const hashes = hashFile(filePath);
     assets.push({
       name: entry.name,
@@ -431,9 +409,7 @@ export function createReleaseManifest(
   const metadata = assets
     .filter(
       (asset): asset is ReleaseAsset & { role: MetadataRole } =>
-        asset.role === "macos-metadata" ||
-        asset.role === "windows-metadata" ||
-        asset.role === "windows-web-metadata"
+        asset.role === "macos-metadata" || asset.role === "windows-metadata"
     )
     .map((asset) => {
       const parsed = parseMetadata(join(assetsDirectory, asset.name));
@@ -456,8 +432,6 @@ export function createReleaseManifest(
 type RequiredMetadataNames = {
   macosZip: string;
   windowsNsis: string;
-  windowsWebSetup: string;
-  windowsWebPackage: string;
 };
 
 function assertMetadataSummary(
@@ -467,7 +441,13 @@ function assertMetadataSummary(
   if (manifest.metadata === undefined) {
     throw new Error("manifestにmetadata参照がありません");
   }
-  const byRole = new Map(manifest.metadata.map((metadata) => [metadata.role, metadata]));
+  const byRole = new Map<MetadataRole, ManifestMetadata>();
+  for (const metadata of manifest.metadata) {
+    if (byRole.has(metadata.role)) {
+      throw new Error(`manifestのmetadata roleが重複しています: ${metadata.role}`);
+    }
+    byRole.set(metadata.role, metadata);
+  }
   const macosMetadata = byRole.get("macos-metadata");
   const windowsMetadata = byRole.get("windows-metadata");
   if (macosMetadata === undefined || windowsMetadata === undefined) {
@@ -487,27 +467,9 @@ function assertMetadataSummary(
   if (
     windowsMetadata.path !== contractNames.windowsNsis ||
     !windowsMetadata.files.includes(contractNames.windowsNsis) ||
-    windowsMetadata.files.some(
-      (name) =>
-        name !== contractNames.windowsNsis ||
-        name === contractNames.windowsWebSetup ||
-        name === contractNames.windowsWebPackage
-    )
+    windowsMetadata.files.some((name) => name !== contractNames.windowsNsis)
   ) {
     throw new Error("manifestのWindows metadata参照が不正です");
-  }
-  const windowsWebMetadata = byRole.get("windows-web-metadata");
-  if (windowsWebMetadata !== undefined) {
-    if (
-      windowsWebMetadata.path !== contractNames.windowsWebSetup ||
-      !windowsWebMetadata.files.includes(contractNames.windowsWebSetup) ||
-      !windowsWebMetadata.files.includes(contractNames.windowsWebPackage) ||
-      windowsWebMetadata.files.some(
-        (name) => name !== contractNames.windowsWebSetup && name !== contractNames.windowsWebPackage
-      )
-    ) {
-      throw new Error("manifestのWindows Web metadata参照が不正です");
-    }
   }
 }
 
@@ -515,30 +477,25 @@ function assertMetadataSummary(
 export function assertReleaseSetComplete(manifestValue: unknown): void {
   const manifest = parseReleaseManifest(manifestValue);
   const roles = new Set(manifest.assets.map((asset) => asset.role));
+  const names = new Set<string>();
+  for (const asset of manifest.assets) {
+    if (names.has(asset.name.toLowerCase())) {
+      throw new Error(`manifestのasset filenameが重複しています: ${asset.name}`);
+    }
+    names.add(asset.name.toLowerCase());
+  }
+  if (roles.size !== manifest.assets.length) {
+    throw new Error("manifestのasset roleが重複しています");
+  }
   const missing = requiredRoles.filter((role) => !roles.has(role));
   if (missing.length > 0) {
     throw new Error(`release setの必須asset roleが不足しています: ${missing.join(", ")}`);
   }
   assertBlockmapPair(manifest);
-  const contractNames = {
-    macosZip: manifest.assets.find((asset) => asset.role === "macos-zip")?.name,
-    windowsNsis: manifest.assets.find((asset) => asset.role === "windows-nsis")?.name,
-    windowsWebSetup: manifest.assets.find((asset) => asset.role === "windows-web-setup")?.name,
-    windowsWebPackage: manifest.assets.find((asset) => asset.role === "windows-web-package")?.name
-  };
-  if (
-    contractNames.macosZip === undefined ||
-    contractNames.windowsNsis === undefined ||
-    contractNames.windowsWebSetup === undefined ||
-    contractNames.windowsWebPackage === undefined
-  ) {
+  const macosZip = manifest.assets.find((asset) => asset.role === "macos-zip")?.name;
+  const windowsNsis = manifest.assets.find((asset) => asset.role === "windows-nsis")?.name;
+  if (macosZip === undefined || windowsNsis === undefined) {
     throw new Error("release setの必須assetが不足しています");
   }
-  const requiredNames: RequiredMetadataNames = {
-    macosZip: contractNames.macosZip,
-    windowsNsis: contractNames.windowsNsis,
-    windowsWebSetup: contractNames.windowsWebSetup,
-    windowsWebPackage: contractNames.windowsWebPackage
-  };
-  assertMetadataSummary(manifest, requiredNames);
+  assertMetadataSummary(manifest, { macosZip, windowsNsis });
 }

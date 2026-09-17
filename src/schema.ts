@@ -10,6 +10,7 @@ const appKeyPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const buildScriptPattern = /^[A-Za-z0-9:_-]+$/;
 const packageManagerPattern = /^pnpm@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const packageNamePattern = /^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/;
+const artifactNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const repositoryPattern =
   /^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -53,6 +54,7 @@ function isValidGitRef(value: string, allowTrailingSlash: boolean): boolean {
       (segment.length > 0 &&
         segment !== "." &&
         segment !== ".." &&
+        segment !== "@" &&
         !segment.startsWith(".") &&
         !segment.endsWith(".") &&
         !segment.endsWith(".lock"))
@@ -78,6 +80,24 @@ const repositorySchema = z
 const packageNameSchema = z.string().regex(packageNamePattern, "packageNameが不正です");
 const appIdSchema = z.string().regex(appIdPattern, "appIdはreverse-DNS形式で指定してください");
 const nonEmptyStringSchema = z.string().min(1, "空文字は指定できません");
+const productNameSchema = nonEmptyStringSchema
+  .refine((value) => value.trim() === value, "productNameの先頭末尾に空白を指定できません")
+  .refine(
+    (value) =>
+      !value.includes("/") &&
+      !value.includes("\\") &&
+      [...value].every((character) => {
+        const code = character.codePointAt(0);
+        return (
+          code !== undefined && code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f)
+        );
+      }),
+    "productNameに制御文字またはpath separatorを指定できません"
+  );
+const artifactNameSchema = z
+  .string()
+  .regex(artifactNamePattern, "artifactNameが不正です")
+  .refine((value) => !value.endsWith("."), "artifactNameの末尾にdotを指定できません");
 
 function isRelativePosixPath(value: string, allowCurrentDirectory: boolean): boolean {
   if (
@@ -183,7 +203,8 @@ const buildScriptsSchema = z
 const identitySchema = z
   .object({
     appId: appIdSchema,
-    productName: nonEmptyStringSchema
+    productName: productNameSchema,
+    artifactName: artifactNameSchema
   })
   .strict();
 
@@ -326,8 +347,7 @@ const assetRoleSchema = z.enum([
   "windows-nsis-blockmap",
   "windows-web-setup",
   "windows-web-package",
-  "windows-metadata",
-  "windows-web-metadata"
+  "windows-metadata"
 ]);
 
 const releaseAssetSchema = z
@@ -452,7 +472,7 @@ const releaseManifestSchema = z
       .array(
         z
           .object({
-            role: z.enum(["macos-metadata", "windows-metadata", "windows-web-metadata"]),
+            role: z.enum(["macos-metadata", "windows-metadata"]),
             name: nonEmptyStringSchema,
             path: nonEmptyStringSchema,
             files: z.array(nonEmptyStringSchema)

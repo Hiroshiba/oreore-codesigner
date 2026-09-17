@@ -133,12 +133,19 @@ function executeCreateManifest(options: Map<string, string>): void {
 }
 
 function executePlanPublish(options: Map<string, string>): void {
-  assertAllowedOptions(options, ["contract", "manifest", "remote-assets", "output"]);
+  assertAllowedOptions(options, [
+    "contract",
+    "manifest",
+    "remote-assets",
+    "assets-directory",
+    "output"
+  ]);
   const contract = loadJsonFile(requiredOption(options, "contract"));
   const manifest = loadJsonFile(requiredOption(options, "manifest"));
   const remoteAssets = loadJsonFile(requiredOption(options, "remote-assets"));
+  const assetsDirectory = requiredOption(options, "assets-directory");
   assertReleaseSetComplete(manifest);
-  const plan = createPublishPlan(process.cwd(), contract, manifest, remoteAssets);
+  const plan = createPublishPlan(process.cwd(), contract, manifest, remoteAssets, assetsDirectory);
   writeJsonFile(requiredOption(options, "output"), plan);
 }
 

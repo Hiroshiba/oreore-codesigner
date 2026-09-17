@@ -22,6 +22,7 @@ certificates/**/fingerprint.txt
 *.p12
 *.pfx
 *.key
+*.pem
 private-key.pem
 **/private-key.pem
 *private-key*.pem

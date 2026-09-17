@@ -40,7 +40,7 @@ function validApplication(): ApplicationConfig {
     packageName: "demo",
     pnpmVersion: "10.30.2",
     buildScripts: { macos: "build:macos", windows: "build:windows" },
-    identity: { appId: "com.example.demo", productName: "Demo" },
+    identity: { appId: "com.example.demo", productName: "Demo", artifactName: "demo" },
     macos: {
       runner: "macos-14",
       architecture: "x64",
@@ -104,6 +104,24 @@ function writeSource(rootDirectory: string, dependencyVersion: string | undefine
       scripts: { "build:macos": "build", "build:windows": "build" },
       dependencies: { "electron-updater": "6.8.9" },
       devDependencies: { "electron-builder": version }
+    })
+  );
+}
+
+function writeSourcePackage(
+  rootDirectory: string,
+  dependencies: Record<string, string>,
+  devDependencies: Record<string, string>
+): void {
+  writeFileSync(
+    join(rootDirectory, "package.json"),
+    JSON.stringify({
+      name: "demo",
+      version: "1.2.3",
+      packageManager: "pnpm@10.30.2",
+      scripts: { "build:macos": "build", "build:windows": "build" },
+      dependencies,
+      devDependencies
     })
   );
 }
@@ -200,6 +218,33 @@ describe("configuration schema", () => {
     expect(() => parseApplicationsConfig({ applications: { "demo-app": application } })).toThrow();
   });
 
+  it("artifactNameとproductNameの表示値を厳格に検証する", () => {
+    const productNameWithSeparator = validApplication();
+    productNameWithSeparator.identity = {
+      ...productNameWithSeparator.identity,
+      productName: " Demo"
+    };
+    expect(() =>
+      parseApplicationsConfig({ applications: { "demo-app": productNameWithSeparator } })
+    ).toThrow();
+    const artifactNameWithSeparator = validApplication();
+    artifactNameWithSeparator.identity = {
+      ...artifactNameWithSeparator.identity,
+      artifactName: "demo/name"
+    };
+    expect(() =>
+      parseApplicationsConfig({ applications: { "demo-app": artifactNameWithSeparator } })
+    ).toThrow();
+    const artifactNameWithDot = validApplication();
+    artifactNameWithDot.identity = {
+      ...artifactNameWithDot.identity,
+      artifactName: "demo."
+    };
+    expect(() =>
+      parseApplicationsConfig({ applications: { "demo-app": artifactNameWithDot } })
+    ).toThrow();
+  });
+
   it("signing未設定とpublisherName不一致をprepareで拒否する", () => {
     const root = temporaryDirectory();
     const application = validApplication();
@@ -276,6 +321,27 @@ describe("source validation", () => {
     ).toThrow();
   });
 
+  it("electron依存の重複と分類違いを拒否する", () => {
+    const root = temporaryDirectory();
+    writeConfiguration(root, validApplication());
+    writeSource(root, undefined);
+    const contract = prepareContract(root, "demo-app", "v1.2.3", false);
+    writeSourcePackage(
+      root,
+      { "electron-builder": "26.16.1", "electron-updater": "6.8.9" },
+      { "electron-builder": "26.16.1" }
+    );
+    expect(() => validateSource(root, contract, root)).toThrow();
+    writeSourcePackage(
+      root,
+      { "electron-builder": "26.16.0", "electron-updater": "6.8.9" },
+      { "electron-builder": "26.16.1" }
+    );
+    expect(() => validateSource(root, contract, root)).toThrow();
+    writeSourcePackage(root, { "electron-builder": "26.16.1" }, { "electron-updater": "6.8.9" });
+    expect(() => validateSource(root, contract, root)).toThrow();
+  });
+
   it("contractの改ざんを後続commandで拒否する", () => {
     const root = temporaryDirectory();
     writeConfiguration(root, validApplication());
@@ -322,6 +388,42 @@ describe("source validation", () => {
     symlinkSync(lockTarget, join(root, "pnpm-lock.yaml"));
     expect(() => validateSource(root, contract, root)).toThrow();
   });
+
+  it("source rootとworkingDirectoryのsymlinkを拒否する", () => {
+    const central = temporaryDirectory();
+    const source = temporaryDirectory();
+    writeConfiguration(central, validApplication());
+    writeSource(source, undefined);
+    const contract = prepareContract(central, "demo-app", "v1.2.3", false);
+    const sourceLink = join(central, "source-link");
+    symlinkSync(source, sourceLink);
+    expect(() => validateSource(central, contract, sourceLink)).toThrow();
+
+    const linkedSource = temporaryDirectory();
+    const externalWorkingDirectory = temporaryDirectory();
+    const application = validApplication();
+    application.workingDirectory = "linked-app";
+    writeConfiguration(central, application);
+    writeConfiguration(linkedSource, application);
+    writeFileSync(
+      join(linkedSource, "package.json"),
+      JSON.stringify({ packageManager: "pnpm@10.30.2" })
+    );
+    writeFileSync(join(linkedSource, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(
+      join(externalWorkingDirectory, "package.json"),
+      JSON.stringify({
+        name: "demo",
+        version: "1.2.3",
+        scripts: { "build:macos": "build", "build:windows": "build" },
+        dependencies: { "electron-updater": "6.8.9" },
+        devDependencies: { "electron-builder": "26.16.1" }
+      })
+    );
+    symlinkSync(externalWorkingDirectory, join(linkedSource, "linked-app"));
+    const linkedContract = prepareContract(central, "demo-app", "v1.2.3", false);
+    expect(() => validateSource(central, linkedContract, linkedSource)).toThrow();
+  });
 });
 
 describe("manifest and publish plan", () => {
@@ -335,6 +437,12 @@ describe("manifest and publish plan", () => {
     const link = join(root, "link.json");
     symlinkSync(target, link);
     expect(() => writeJsonFile(link, { ok: true })).toThrow();
+
+    const realParent = join(root, "real-parent");
+    mkdirSync(realParent);
+    const parentLink = join(root, "parent-link");
+    symlinkSync(realParent, parentLink);
+    expect(() => writeJsonFile(join(parentLink, "nested.json"), { ok: true })).toThrow();
   });
 
   it("windows targetを通常NSISとWebに分離する", () => {
@@ -352,6 +460,15 @@ describe("manifest and publish plan", () => {
     expect(nsisConfig).not.toContain("target: nsis-web");
     expect(webConfig).toContain("target: nsis-web");
     expect(webConfig).not.toContain("target: nsis\n");
+    expect(nsisConfig).toContain("artifactName: demo-Setup-");
+    expect(nsisConfig).not.toContain("${productName} Setup");
+    const realParent = join(root, "project-parent");
+    mkdirSync(realParent);
+    const parentLink = join(root, "project-parent-link");
+    symlinkSync(realParent, parentLink);
+    expect(() =>
+      createPackageProject(root, contract, "windows-nsis", join(parentLink, "project"))
+    ).toThrow();
   });
 
   it("electron-builderのWindows Web package名を厳格にrole化する", () => {
@@ -375,7 +492,7 @@ describe("manifest and publish plan", () => {
     const contract = validateSource(root, prepareContract(root, "demo-app", "v1.2.3", false), root);
     const assets = join(root, "assets");
     mkdirSync(assets);
-    const installerName = "Demo Setup 1.2.3.exe";
+    const installerName = "demo-Setup-1.2.3.exe";
     const installerContents = "installer";
     writeFileSync(join(assets, installerName), installerContents);
     writeWindowsMetadata(assets, "1.2.3", installerName, installerContents, "latest.yml");
@@ -396,6 +513,62 @@ describe("manifest and publish plan", () => {
         ""
       ].join("\n")
     );
+    expect(() => createReleaseManifest(root, contract, assets)).toThrow();
+  });
+
+  it("publish plan生成時に保存manifestと実assetとmetadataを再照合する", () => {
+    const root = temporaryDirectory();
+    writeConfiguration(root, validApplication());
+    writeSource(root, undefined);
+    const contract = validateSource(root, prepareContract(root, "demo-app", "v1.2.3", false), root);
+    const assets = join(root, "assets");
+    mkdirSync(assets);
+    const installerName = "demo-Setup-1.2.3.exe";
+    writeFileSync(join(assets, installerName), "installer");
+    writeWindowsMetadata(assets, "1.2.3", installerName, "installer", "latest.yml");
+    const manifest = createReleaseManifest(root, contract, assets);
+    const installer = manifest.assets.find((asset) => asset.role === "windows-nsis");
+    if (installer === undefined) {
+      throw new Error("test installerがありません");
+    }
+    const remoteAssets = [{ name: installerName, digest: installer.digest }];
+    expect(() => createPublishPlan(root, contract, manifest, remoteAssets, assets)).not.toThrow();
+    const fakeManifest = {
+      ...manifest,
+      assets: manifest.assets.map((asset) =>
+        asset.role === "windows-nsis" ? { ...asset, digest: `sha256:${"f".repeat(64)}` } : asset
+      )
+    };
+    expect(() => createPublishPlan(root, contract, fakeManifest, remoteAssets, assets)).toThrow();
+
+    writeFileSync(join(assets, installerName), "replaced installer");
+    expect(() => createPublishPlan(root, contract, manifest, remoteAssets, assets)).toThrow();
+    writeFileSync(join(assets, installerName), "installer");
+    writeFileSync(
+      join(assets, "latest.yml"),
+      [
+        "version: 1.2.3",
+        "releaseDate: 2026-09-17T00:00:00.000Z",
+        "files:",
+        `  - url: ${installerName}`,
+        `    sha512: ${sha512("installer")}`,
+        "    size: 9",
+        `path: ${installerName}`,
+        `sha512: ${sha512("installer")}`,
+        ""
+      ].join("\n")
+    );
+    expect(() => createPublishPlan(root, contract, manifest, remoteAssets, assets)).toThrow();
+  });
+
+  it("Web outputのmetadataをrelease assetとして受理しない", () => {
+    const root = temporaryDirectory();
+    writeConfiguration(root, validApplication());
+    writeSource(root, undefined);
+    const contract = validateSource(root, prepareContract(root, "demo-app", "v1.2.3", false), root);
+    const assets = join(root, "assets");
+    mkdirSync(assets);
+    writeFileSync(join(assets, "latest-web.yml"), "version: 1.2.3\n");
     expect(() => createReleaseManifest(root, contract, assets)).toThrow();
   });
 
@@ -440,7 +613,7 @@ describe("manifest and publish plan", () => {
       );
       const assets = join(root, "assets");
       mkdirSync(assets);
-      const installerName = `Demo Setup ${testCase.version}.exe`;
+      const installerName = `demo-Setup-${testCase.version}.exe`;
       writeFileSync(join(assets, installerName), "installer");
       writeWindowsMetadata(
         assets,
@@ -463,7 +636,7 @@ describe("manifest and publish plan", () => {
     mkdirSync(assets);
     const source = join(root, "payload");
     writeFileSync(source, "payload");
-    symlinkSync(source, join(assets, "Demo-1.2.3-x64.zip"));
+    symlinkSync(source, join(assets, "demo-1.2.3-x64.zip"));
     expect(() => createReleaseManifest(root, contract, assets)).toThrow();
   });
 
@@ -472,36 +645,37 @@ describe("manifest and publish plan", () => {
     writeConfiguration(root, validApplication());
     writeSource(root, undefined);
     const contract = validateSource(root, prepareContract(root, "demo-app", "v1.2.3", false), root);
-    const manifest = {
-      schemaVersion: 1,
-      appId: "demo-app",
-      repository: "owner/demo",
-      tag: "v1.2.3",
-      version: "1.2.3",
-      assets: [
-        {
-          name: "Demo-1.2.3-x64.zip",
-          size: 7,
-          digest: `sha256:${createHash("sha256").update("payload").digest("hex")}`,
-          role: "macos-zip"
-        }
-      ]
-    };
+    const assets = join(root, "assets");
+    mkdirSync(assets);
+    writeFileSync(join(assets, "demo-1.2.3-x64.zip"), "payload");
+    const manifest = createReleaseManifest(root, contract, assets);
     const asset = manifest.assets[0];
     if (asset === undefined) {
       throw new Error("test assetがありません");
     }
-    const plan = createPublishPlan(root, contract, manifest, [
-      { name: "Demo-1.2.3-x64.zip", digest: asset.digest },
-      { name: "unrelated.zip", digest: `sha256:${"0".repeat(64)}` }
-    ]);
+    const plan = createPublishPlan(
+      root,
+      contract,
+      manifest,
+      [
+        { name: "demo-1.2.3-x64.zip", digest: asset.digest },
+        { name: "unrelated.zip", digest: `sha256:${"0".repeat(64)}` }
+      ],
+      assets
+    );
     expect(plan.operations[0]?.action).toBe("skip");
     expect(plan.operations).toHaveLength(1);
     expect(() =>
-      createPublishPlan(root, contract, manifest, [
-        { name: "Demo-1.2.3-x64.zip", digest: `sha256:${"0".repeat(64)}` },
-        { name: "Demo-1.2.3-x64.zip", digest: `sha256:${"1".repeat(64)}` }
-      ])
+      createPublishPlan(
+        root,
+        contract,
+        manifest,
+        [
+          { name: "demo-1.2.3-x64.zip", digest: `sha256:${"0".repeat(64)}` },
+          { name: "demo-1.2.3-x64.zip", digest: `sha256:${"1".repeat(64)}` }
+        ],
+        assets
+      )
     ).toThrow();
   });
 
