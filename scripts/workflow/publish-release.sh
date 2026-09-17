@@ -538,9 +538,22 @@ remote_has_digest() {
     "$remote_assets_path" >/dev/null
 }
 
-remote_has_name() {
+remote_asset_observation() {
   local name=$1
-  jq -e --arg name "$name" 'any(.[]; .name == $name)' "$remote_assets_path" >/dev/null
+  local record
+  if ! record=$(remote_asset_record "$name" 2>/dev/null); then
+    printf '%s\n' '{"present":true,"valid":false,"assetId":null,"digest":null,"size":null}'
+    return 1
+  fi
+  if [[ "$record" == null ]]; then
+    printf '%s\n' '{"present":false,"valid":true,"assetId":null,"digest":null,"size":null}'
+    return 0
+  fi
+  if ! jq -e '(.id | numbers) > 0 and (.digest | strings | length) > 0 and (.size | numbers) >= 0' <<<"$record" >/dev/null; then
+    printf '%s\n' '{"present":true,"valid":false,"assetId":null,"digest":null,"size":null}'
+    return 1
+  fi
+  jq -c '{present: true, valid: true, assetId: .id, digest: (.digest | ascii_downcase), size: .size}' <<<"$record"
 }
 
 journal_mutation_intent() {
@@ -568,12 +581,105 @@ journal_mutation_result() {
   local asset_id_json=$5
   local status=$6
   local result=$7
+  local observed_at
+  local status_json=null
+  local observed_status_json=null
+  if [[ "$status" != null ]]; then
+    if [[ "$status" == 000 ]]; then
+      observed_status_json=$(jq -cn --arg status "$status" '$status')
+    elif [[ "$status" =~ ^[0-9]{3}$ ]]; then
+      if ! status_json=$(jq -cn --arg status "$status" '$status | tonumber'); then
+        return 1
+      fi
+      observed_status_json=$(jq -cn --arg status "$status" '$status')
+    else
+      observed_status_json=$(jq -cn --arg status "$status" '$status')
+    fi
+  fi
+  observed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   journal_line=$(jq -c -n \
     --arg event result --arg operation "$operation" --arg action "$action" --arg role "$role" \
-    --arg name "$name" --arg result "$result" --argjson release_id "$initial_release_id" \
-    --argjson asset_id "$asset_id_json" --argjson status "$status" \
-    '{event: $event, operation: $operation, action: $action, role: $role, expectedReleaseId: $release_id, assetId: $asset_id, name: $name, httpStatus: $status, result: $result}')
+    --arg name "$name" --arg result "$result" --arg observed_at "$observed_at" --argjson release_id "$initial_release_id" \
+    --argjson asset_id "$asset_id_json" --argjson status "$status_json" --argjson observed_status "$observed_status_json" \
+    '{event: $event, operation: $operation, action: $action, role: $role, expectedReleaseId: $release_id, assetId: $asset_id, name: $name, httpStatus: $status, observedHttpStatus: $observed_status, observedAt: $observed_at, result: $result}')
   append_journal_line "$journal_line"
+}
+
+journal_upload_result() {
+  local action=$1
+  local role=$2
+  local name=$3
+  local asset_id_json=$4
+  local status=$5
+  local result=$6
+  local expected_digest=$7
+  local expected_size=$8
+  local observed_digest_json=$9
+  local observed_size_json=${10}
+  local asset_id_verified=${11}
+  local observed_at
+  local status_json=null
+  local observed_status_json=null
+  if [[ "$status" != null ]]; then
+    if [[ "$status" == 000 ]]; then
+      observed_status_json=$(jq -cn --arg status "$status" '$status')
+    elif [[ "$status" =~ ^[0-9]{3}$ ]]; then
+      if ! status_json=$(jq -cn --arg status "$status" '$status | tonumber'); then
+        return 1
+      fi
+      observed_status_json=$(jq -cn --arg status "$status" '$status')
+    else
+      observed_status_json=$(jq -cn --arg status "$status" '$status')
+    fi
+  fi
+  observed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  if ! journal_line=$(jq -c -n \
+    --arg event result --arg operation upload --arg action "$action" --arg role "$role" \
+    --arg name "$name" --arg result "$result" --arg expected_digest "$expected_digest" \
+    --arg observed_at "$observed_at" --argjson release_id "$initial_release_id" \
+    --argjson asset_id "$asset_id_json" --argjson digest "$observed_digest_json" \
+    --argjson size "$observed_size_json" --argjson status "$status_json" \
+    --argjson observed_status "$observed_status_json" --argjson expected_size "$expected_size" \
+    --argjson asset_id_verified "$asset_id_verified" \
+    '{event: $event, operation: $operation, action: $action, role: $role, expectedReleaseId: $release_id, assetId: $asset_id, name: $name, digest: $digest, size: $size, httpStatus: $status, observedHttpStatus: $observed_status, observedAt: $observed_at, expectedDigest: $expected_digest, expectedSize: $expected_size, assetIdVerified: $asset_id_verified, result: $result}'); then
+    return 1
+  fi
+  append_journal_line "$journal_line"
+}
+
+record_upload_name_conflict() {
+  local action=$1
+  local role=$2
+  local name=$3
+  local expected_digest=$4
+  local expected_size=$5
+  local status=$6
+  local observation=$7
+  local observed_asset_id_json
+  local observed_digest_json
+  local observed_size_json
+  local observed_digest
+  local observed_size
+  local result
+  observed_asset_id_json=$(jq -c '.assetId // null' <<<"$observation")
+  observed_digest_json=$(jq -c '.digest // null' <<<"$observation")
+  observed_size_json=$(jq -c '.size // null' <<<"$observation")
+  observed_digest=$(jq -r '.digest // empty' <<<"$observation")
+  observed_size=$(jq -r '.size // empty' <<<"$observation")
+  if [[ "$(jq -r '.valid' <<<"$observation")" != true ]]; then
+    result=manual-conflict-invalid-observation
+    manual_conflicts["$name"]='同名assetの観測metadataが不正です'
+  elif [[ "$observed_digest" == "${expected_digest,,}" && "$observed_size" == "$expected_size" ]]; then
+    result=manual-conflict-same-digest
+    manual_conflicts["$name"]="同名assetが既に存在します: observed=$(jq -r '.assetId // "null"' <<<"$observation")"
+  else
+    result=manual-conflict-digest-mismatch
+    manual_conflicts["$name"]="同名assetのdigestまたはsizeが異なります: observed=$(jq -r '.assetId // "null"' <<<"$observation")"
+  fi
+  if ! journal_upload_result "$action" "$role" "$name" "$observed_asset_id_json" "$status" "$result" \
+    "$expected_digest" "$expected_size" "$observed_digest_json" "$observed_size_json" false; then
+    return 1
+  fi
 }
 
 delete_asset() {
@@ -685,9 +791,12 @@ upload_asset() {
   local encoded_name
   local attempt
   local response_path="$work_directory/upload-response.json"
-  local current_record
-  local current_id
   local mutation_status
+  local observation
+  local remote_fetch_status
+  local observed_asset_id_json
+  local observed_digest_json
+  local observed_size_json
   if [[ "$in_rollback" == true ]]; then
     if ! ensure_time_budget "rollback asset upload: $asset_name" || ! reconfirm_mutation_context; then
       return 1
@@ -701,7 +810,18 @@ upload_asset() {
     printf 'asset upload前のremote asset再取得に失敗しました: %s\n' "$asset_name" >&2
     return 1
   fi
-  if remote_has_name "$asset_name"; then
+  if ! observation=$(remote_asset_observation "$asset_name"); then
+    if [[ "$(jq -r '.present' <<<"$observation")" == true ]]; then
+      if ! record_upload_name_conflict "$action" "$role" "$asset_name" "$digest" "$size" null "$observation"; then
+        return 1
+      fi
+      printf 'asset upload対象の同名asset観測が不正です: %s\n' "$asset_name" >&2
+      return 1
+    fi
+  elif [[ "$(jq -r '.present' <<<"$observation")" == true ]]; then
+    if ! record_upload_name_conflict "$action" "$role" "$asset_name" "$digest" "$size" null "$observation"; then
+      return 1
+    fi
     printf 'asset upload対象名が既に存在します: %s\n' "$asset_name" >&2
     return 1
   fi
@@ -714,8 +834,17 @@ upload_asset() {
       printf 'asset upload retry前のremote asset再取得に失敗しました: %s\n' "$asset_name" >&2
       return 1
     fi
-    if remote_has_name "$asset_name"; then
-      manual_conflicts["$asset_name"]="asset upload retry前に同名assetが存在します"
+    if ! observation=$(remote_asset_observation "$asset_name"); then
+      if [[ "$(jq -r '.present' <<<"$observation")" == true ]]; then
+        if ! record_upload_name_conflict "$action" "$role" "$asset_name" "$digest" "$size" null "$observation"; then
+          return 1
+        fi
+        return 1
+      fi
+    elif [[ "$(jq -r '.present' <<<"$observation")" == true ]]; then
+      if ! record_upload_name_conflict "$action" "$role" "$asset_name" "$digest" "$size" null "$observation"; then
+        return 1
+      fi
       return 1
     fi
     if ! journal_mutation_intent upload "$action" "$role" "$asset_name" null "$digest" "$size" "asset name=$asset_name attempt=$attemptをupload"; then
@@ -731,17 +860,42 @@ upload_asset() {
       return 0
     fi
     if [[ "$HTTP_STATUS" == 401 ]]; then
+      if ! journal_upload_result "$action" "$role" "$asset_name" null "$mutation_status" upload-unauthorized \
+        "$digest" "$size" null null false; then
+        return 1
+      fi
       printf 'asset upload API tokenが期限切れまたは権限不正です: %s\n' "$asset_name" >&2
       return 1
     fi
     if is_retryable_status "$HTTP_STATUS"; then
-      if fetch_remote_assets && remote_has_digest "$asset_name" "$digest" "$size"; then
-        current_record=$(remote_asset_record "$asset_name")
-        current_id=$(jq -er '.id | numbers' <<<"$current_record")
-        manual_conflicts["$asset_name"]="uploadの曖昧応答後にasset idを確定できません: observed=$current_id"
-        journal_mutation_result upload "$action" "$role" "$asset_name" "$current_id" "$mutation_status" manual-conflict
+      if fetch_remote_assets; then
+        remote_fetch_status=$HTTP_STATUS
+        if ! observation=$(remote_asset_observation "$asset_name"); then
+          if [[ "$(jq -r '.present' <<<"$observation")" == true ]]; then
+            if ! record_upload_name_conflict "$action" "$role" "$asset_name" "$digest" "$size" "$mutation_status" "$observation"; then
+              return 1
+            fi
+            return 1
+          fi
+        elif [[ "$(jq -r '.present' <<<"$observation")" == true ]]; then
+          if ! record_upload_name_conflict "$action" "$role" "$asset_name" "$digest" "$size" "$mutation_status" "$observation"; then
+            return 1
+          fi
+          return 1
+        fi
+      else
+        remote_fetch_status=$HTTP_STATUS
+        observation='{"present":false,"valid":false,"assetId":null,"digest":null,"size":null}'
+      fi
+      observed_asset_id_json=$(jq -c '.assetId // null' <<<"$observation")
+      observed_digest_json=$(jq -c '.digest // null' <<<"$observation")
+      observed_size_json=$(jq -c '.size // null' <<<"$observation")
+      manual_conflicts["$asset_name"]="uploadの曖昧応答でasset idを確定できません: HTTP=$mutation_status observedHttp=$remote_fetch_status"
+      if ! journal_upload_result "$action" "$role" "$asset_name" "$observed_asset_id_json" "$mutation_status" manual-conflict-ambiguous \
+        "$digest" "$size" "$observed_digest_json" "$observed_size_json" false; then
         return 1
-      elif [[ "$HTTP_STATUS" == 401 ]]; then
+      fi
+      if [[ "$remote_fetch_status" == 401 ]]; then
         printf 'asset upload再確認API tokenが期限切れまたは権限不正です: %s\n' "$asset_name" >&2
         return 1
       fi
@@ -750,6 +904,12 @@ upload_asset() {
           return 1
         fi
         continue
+      fi
+    fi
+    if ! is_retryable_status "$mutation_status"; then
+      if ! journal_upload_result "$action" "$role" "$asset_name" null "$mutation_status" upload-failed \
+        "$digest" "$size" null null false; then
+        return 1
       fi
     fi
     printf 'asset uploadに失敗しました: %s HTTP %s\n' "$asset_name" "$HTTP_STATUS" >&2
@@ -898,13 +1058,22 @@ mark_upload_success() {
   local size=$5
   local response_path=$6
   local asset_id
+  local observed_digest_json=null
+  local observed_size_json=null
+  if [[ -f "$response_path" ]]; then
+    if ! observed_digest_json=$(jq -c 'if (.digest | type) == "string" then (.digest | ascii_downcase) else null end' "$response_path" 2>/dev/null); then
+      observed_digest_json=null
+    fi
+    if ! observed_size_json=$(jq -c 'if (.size | type) == "number" then .size else null end' "$response_path" 2>/dev/null); then
+      observed_size_json=null
+    fi
+  fi
   if [[ -z "$response_path" ]] || ! asset_id=$(jq -er '.id | numbers | select(. > 0)' "$response_path"); then
     manual_conflicts["$name"]='upload応答でasset idを確定できません'
-    journal_line=$(jq -c -n \
-      --arg event result --arg operation upload --arg action "$action" --arg role "$role" \
-      --arg name "$name" --arg digest "$digest" --argjson size "$size" --argjson release_id "$initial_release_id" \
-      '{event: $event, operation: $operation, action: $action, role: $role, expectedReleaseId: $release_id, name: $name, digest: $digest, size: $size, assetId: null, httpStatus: 201, assetIdVerified: false}')
-    append_journal_line "$journal_line"
+    if ! journal_upload_result "$action" "$role" "$name" null 201 upload-response-missing-id \
+      "$digest" "$size" "$observed_digest_json" "$observed_size_json" false; then
+      return 1
+    fi
     return 1
   fi
   if [[ "$in_rollback" == false ]]; then
@@ -913,14 +1082,10 @@ mark_upload_success() {
     created_digests+=("$digest")
     created_sizes+=("$size")
   fi
-  if ! journal_line=$(jq -c -n \
-    --arg event result --arg operation upload --arg action "$action" --arg role "$role" \
-    --arg name "$name" --arg digest "$digest" --argjson size "$size" --argjson release_id "$initial_release_id" \
-    --argjson asset_id "$asset_id" \
-    '{event: $event, operation: $operation, action: $action, role: $role, expectedReleaseId: $release_id, name: $name, digest: $digest, size: $size, assetId: $asset_id, httpStatus: 201, assetIdVerified: true}'); then
+  if ! journal_upload_result "$action" "$role" "$name" "$asset_id" 201 upload-success \
+    "$digest" "$size" "$observed_digest_json" "$observed_size_json" true; then
     return 1
   fi
-  append_journal_line "$journal_line"
 }
 
 prepare_backups() {
@@ -1110,6 +1275,10 @@ publish_plan() {
       return 1
     fi
   done < <(jq -c '.operations[] | select(.role == "macos-metadata" or .role == "windows-metadata")' "$plan_path")
+  if (( ${#manual_conflicts[@]} > 0 )); then
+    operation_error='曖昧なuploadのmanual conflictが残っているため公開を完了できません'
+    return 1
+  fi
 }
 
 rollback_error=''
@@ -1294,6 +1463,9 @@ rollback_backups() {
       append_rollback_error "旧assetの復元digest検証に失敗しました: $name"
     fi
   done
+  if (( ${#manual_conflicts[@]} > 0 )); then
+    append_rollback_error 'manual conflictがあるためrollbackは未完了です'
+  fi
   in_rollback=false
   [[ -z "$rollback_error" ]]
 }
@@ -1310,6 +1482,10 @@ report_failure_with_rollback() {
   {
     printf 'original error: %s\n' "$original_error"
     printf 'rollback succeeded: %s\n' "$rollback_succeeded"
+    if (( ${#manual_conflicts[@]} > 0 )); then
+      printf '%s\n' 'rollback status: incomplete'
+      printf '%s\n' 'manual recovery required: manual conflictのasset id、digest、sizeをAPIで再確認し、journalのexpectedReleaseIdと一致する場合だけ復旧してください。'
+    fi
     printf 'release id: %s\n' "$release_id"
     printf 'repository: %s\n' "$repository"
     printf 'tag: %s\n' "$tag"

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import http.server
 import os
+import re
 import socketserver
 import subprocess
 import sys
@@ -312,6 +313,29 @@ class WorkflowFixtureTest(unittest.TestCase):
                 self.assertEqual(body.read_bytes(), b"direct release asset\n")
                 self.assertIn(b"--output \"$api_body_path\"", PUBLISH_SCRIPT.read_bytes())
                 self.assertIn(b'if [[ "$HTTP_STATUS" == 200 ]]', PUBLISH_SCRIPT.read_bytes())
+
+    def test_ambiguous_upload_requires_incomplete_rollback(self) -> None:
+        source = PUBLISH_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("manual-conflict-ambiguous", source)
+        self.assertIn("upload-response-missing-id", source)
+        self.assertIn("manual-conflict-same-digest", source)
+        self.assertIn("manual-conflict-digest-mismatch", source)
+        self.assertRegex(
+            source,
+            re.compile(
+                r"journal_upload_result.*?assetId: \$asset_id, name: \$name, "
+                r"digest: \$digest, size: \$size, .*?observedAt: \$observed_at",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            source,
+            re.compile(
+                r"if \(\( \$\{#manual_conflicts\[@\]\} > 0 \)\); then\n"
+                r"\s+append_rollback_error 'manual conflictがあるためrollbackは未完了です'",
+            ),
+        )
+        self.assertIn("rollback status: incomplete", source)
 
     def test_release_false_booleans_are_valid(self) -> None:
         with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:
