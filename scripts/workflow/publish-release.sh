@@ -18,17 +18,10 @@ if [[ ! "$repository" =~ ^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?/[A-Za-z0-9]([
   exit 1
 fi
 
-if [[ -z "$tag" || "$tag" == '@' || "$tag" == /* || "$tag" == */ || "$tag" == *'//'* || "$tag" == *'..'* || "$tag" == *'@{'* || "$tag" == *'~'* || "$tag" == *'^'* || "$tag" == *':'* || "$tag" == *'?'* || "$tag" == *'*'* || "$tag" == *'['* || "$tag" =~ \\ || "$tag" == *'.' || "$tag" =~ [[:cntrl:]] ]]; then
+if ! git check-ref-format "refs/tags/$tag" >/dev/null; then
   printf '%s\n' 'tagはGit refとして不正です' >&2
   exit 1
 fi
-IFS='/' read -r -a tag_segments <<<"$tag"
-for tag_segment in "${tag_segments[@]}"; do
-  if [[ -z "$tag_segment" || "$tag_segment" == '.' || "$tag_segment" == '..' || "$tag_segment" == '@' || "$tag_segment" == .* || "$tag_segment" == *.lock ]]; then
-    printf '%s\n' 'tagはGit refとして不正です' >&2
-    exit 1
-  fi
-done
 
 if [[ ! "$source_sha" =~ ^[0-9A-Fa-f]{40}$ ]]; then
   printf '%s\n' 'source SHAは40桁の16進数で指定してください' >&2
@@ -181,6 +174,8 @@ upload_assets() {
   local section=$1
   local list_path="$work_directory/$section-upload.list"
   local asset_name
+  local attempt
+  local upload_succeeded
   : >"$list_path"
   if [[ "$section" == payload ]]; then
     for asset_name in "${payload_names[@]}"; do
@@ -197,7 +192,17 @@ upload_assets() {
   fi
   while IFS= read -r asset_name; do
     [[ -n "$asset_name" ]] || continue
-    if ! gh release upload "$tag" "$combined_directory/$asset_name" --repo "$repository" --clobber; then
+    upload_succeeded=false
+    for attempt in 1 2 3; do
+      if gh release upload "$tag" "$combined_directory/$asset_name" --repo "$repository" --clobber; then
+        upload_succeeded=true
+        break
+      fi
+      if (( attempt < 3 )); then
+        sleep 1
+      fi
+    done
+    if [[ "$upload_succeeded" != true ]]; then
       printf 'assetの公開に失敗しました: %s\n' "$asset_name" >&2
       return 1
     fi
