@@ -241,11 +241,12 @@ function Invoke-CreatePackageProject(
   [string]$Target,
   [string]$RepositoryName,
   [string]$ReleaseTag,
+  [string]$TimestampUrl,
   [string]$OutputDirectory
 ) {
   Push-Location $CentralRoot
   try {
-    & pnpm cli create-package-project --package-input-directory $PackageInput --target $Target --repository $RepositoryName --tag $ReleaseTag --output-directory $OutputDirectory
+    & pnpm cli create-package-project --package-input-directory $PackageInput --target $Target --repository $RepositoryName --tag $ReleaseTag --timestamp-url $TimestampUrl --output-directory $OutputDirectory
     Assert-ExternalSuccess "$Target package projectの生成に失敗しました"
   } finally {
     Pop-Location
@@ -380,6 +381,8 @@ $pfxPasswordPlain = $null
 try {
   New-Item -ItemType Directory -Path $temporaryDirectory -ErrorAction Stop | Out-Null
   Invoke-SafeExtract $UnsignedArchive $sourceRoot $centralRoot
+  Invoke-CreatePackageProject $centralRoot $PackageInputDirectory 'windows-nsis' $Repository $Tag $timestampUrl $normalProject
+  Invoke-CreatePackageProject $centralRoot $PackageInputDirectory 'windows-nsis-web' $Repository $Tag $timestampUrl $webProject
   $pfxBase64 = $env:WINDOWS_CERTIFICATE_PFX_BASE64
   $pfxPasswordPlain = $env:WINDOWS_CERTIFICATE_PASSWORD
   $env:WINDOWS_CERTIFICATE_PFX_BASE64 = $null
@@ -436,8 +439,6 @@ try {
   $env:WIN_CSC_LINK = $pfxPath
   $env:WIN_CSC_KEY_PASSWORD = $pfxPasswordPlain
   $env:CSC_IDENTITY_AUTO_DISCOVERY = 'false'
-  Invoke-CreatePackageProject $centralRoot $PackageInputDirectory 'windows-nsis' $Repository $Tag $normalProject
-  Invoke-CreatePackageProject $centralRoot $PackageInputDirectory 'windows-nsis-web' $Repository $Tag $webProject
   Invoke-Builder $normalProject $payloadPath $centralRoot
   Invoke-Builder $webProject $payloadPath $centralRoot
 
