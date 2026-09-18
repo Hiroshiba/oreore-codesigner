@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createPackageInput } from "./package-input.js";
 import { createPackageProject } from "./package-project.js";
 import { validateReleaseAssets } from "./release-assets.js";
+import { parseGitTag, parseRepository } from "./schema.js";
 
 const commandSchema = z.enum([
   "create-package-input",
@@ -13,7 +14,6 @@ const commandSchema = z.enum([
 ]);
 const pathSchema = z.string().min(1, "pathを空にできません");
 const platformSchema = z.enum(["macos", "windows"]);
-const targetSchema = z.enum(["macos", "windows-nsis", "windows-nsis-web"]);
 
 const inputOptionsSchema = z
   .object({
@@ -23,20 +23,36 @@ const inputOptionsSchema = z
     "output-directory": pathSchema
   })
   .strict();
-const projectOptionsSchema = z
-  .object({
-    "package-input-directory": pathSchema,
-    target: targetSchema,
-    repository: z
-      .string()
-      .regex(
-        /^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$/,
-        "repositoryはowner/name形式で指定してください"
-      ),
-    tag: z.string().min(1, "tagを空にできません"),
-    "output-directory": pathSchema
-  })
-  .strict();
+const repositorySchema = z.string().transform(parseRepository);
+const tagSchema = z.string().transform(parseGitTag);
+const timestampUrlSchema = z
+  .string()
+  .url("timestamp-urlはURLで指定してください")
+  .refine(
+    (value) => new URL(value).protocol === "https:",
+    "timestamp-urlはHTTPSで指定してください"
+  );
+const projectOptionShape = {
+  "package-input-directory": pathSchema,
+  repository: repositorySchema,
+  tag: tagSchema,
+  "output-directory": pathSchema
+};
+const projectOptionsSchema = z.discriminatedUnion("target", [
+  z
+    .object({
+      ...projectOptionShape,
+      target: z.literal("macos")
+    })
+    .strict(),
+  z
+    .object({
+      ...projectOptionShape,
+      target: z.enum(["windows-nsis", "windows-nsis-web"]),
+      "timestamp-url": timestampUrlSchema
+    })
+    .strict()
+]);
 const assetsOptionsSchema = z
   .object({
     "assets-directory": pathSchema,
@@ -65,6 +81,7 @@ function parseOptions(args: string[]): {
       target: { type: "string", multiple: true },
       repository: { type: "string", multiple: true },
       tag: { type: "string", multiple: true },
+      "timestamp-url": { type: "string", multiple: true },
       "assets-directory": { type: "string", multiple: true },
       "expected-version": { type: "string", multiple: true }
     },
@@ -101,13 +118,24 @@ function executeCreatePackageInput(options: ParsedOptions): void {
 
 function executeCreatePackageProject(options: ParsedOptions): void {
   const parsed = projectOptionsSchema.parse(options);
-  createPackageProject(
-    parsed["package-input-directory"],
-    parsed.target,
-    parsed.repository,
-    parsed.tag,
-    parsed["output-directory"]
-  );
+  if (parsed.target === "macos") {
+    createPackageProject({
+      packageInputDirectory: parsed["package-input-directory"],
+      target: parsed.target,
+      repository: parsed.repository,
+      tag: parsed.tag,
+      outputDirectory: parsed["output-directory"]
+    });
+    return;
+  }
+  createPackageProject({
+    packageInputDirectory: parsed["package-input-directory"],
+    target: parsed.target,
+    repository: parsed.repository,
+    tag: parsed.tag,
+    outputDirectory: parsed["output-directory"],
+    timestampUrl: parsed["timestamp-url"]
+  });
 }
 
 function executeValidateReleaseAssets(options: ParsedOptions): void {

@@ -1,18 +1,29 @@
-import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stringify as stringifyYaml } from "yaml";
 import { loadSigningConfig } from "./config.js";
-import {
-  parsePackageInput,
-  parseGitTag,
-  parseRepository,
-  type PackageInput,
-  type PackageProjectTarget
-} from "./schema.js";
+import { parsePackageInput, type PackageInput, type PackageProjectTarget } from "./schema.js";
 import { assertNoSymlinkAncestors, assertNoSymlinkPath } from "./path-safety.js";
 
 export type { PackageProjectTarget } from "./schema.js";
+
+type MacosPackageProjectRequest = {
+  packageInputDirectory: string;
+  target: "macos";
+  repository: string;
+  tag: string;
+  outputDirectory: string;
+};
+type WindowsPackageProjectRequest = {
+  packageInputDirectory: string;
+  target: "windows-nsis" | "windows-nsis-web";
+  repository: string;
+  tag: string;
+  outputDirectory: string;
+  timestampUrl: string;
+};
+export type PackageProjectRequest = MacosPackageProjectRequest | WindowsPackageProjectRequest;
 
 const MAC_ENTITLEMENTS_FILE = "entitlements.plist";
 const MAC_ENTITLEMENTS_INHERIT_FILE = "entitlements-inherit.plist";
@@ -195,7 +206,8 @@ function windowsBuilder(
   input: Extract<PackageInput, { platform: "windows" }>,
   target: "windows-nsis" | "windows-nsis-web",
   repository: string,
-  tag: string
+  tag: string,
+  timestampUrl: string
 ): Record<string, unknown> {
   const windows = input.windows;
   const win: Record<string, unknown> = {
@@ -204,11 +216,13 @@ function windowsBuilder(
         target: target === "windows-nsis" ? "nsis" : "nsis-web",
         arch: [windows.architecture]
       }
-    ]
+    ],
+    executableName: windows.executableName,
+    signtoolOptions: {
+      timeStampServer: timestampUrl,
+      rfc3161TimeStampServer: timestampUrl
+    }
   };
-  if (windows.executableName != undefined) {
-    win.executableName = windows.executableName;
-  }
   const publisherName = globalPublisherName();
   if (publisherName != undefined) {
     if (windows.publisherName != undefined && windows.publisherName !== publisherName) {
@@ -233,38 +247,24 @@ function windowsBuilder(
     result.nsis = selectedOptions;
   } else {
     result.nsisWeb = {
-      ...selectedOptions,
-      appPackageUrl: githubUrl(repository, tag)
+      ...selectedOptions
     };
   }
   result.publish = genericPublish(repository, tag, target === "windows-nsis");
   return result;
 }
 
-function assertProjectFiles(outputRoot: string, expected: string[]): void {
-  const entries = readdirSync(outputRoot, { withFileTypes: true });
-  const expectedSet = new Set(expected);
-  if (entries.length !== expected.length) {
-    throw new Error("package projectのfile件数が一致しません");
-  }
-  for (const entry of entries) {
-    if (!entry.isFile() || entry.isSymbolicLink() || !expectedSet.has(entry.name)) {
-      throw new Error(`想定外のpackage project fileです: ${entry.name}`);
-    }
-  }
-}
-
 function buildProject(
   inputRoot: string,
   outputRoot: string,
   input: PackageInput,
-  target: PackageProjectTarget,
+  request: PackageProjectRequest,
   repository: string,
   tag: string
-): string[] {
+): void {
   writeExclusive(join(outputRoot, "package.json"), packageJson(input));
   let config: Record<string, unknown>;
-  if (target === "macos") {
+  if (request.target === "macos") {
     if (input.platform !== "macos") {
       throw new Error("macos targetにはmacos package inputが必要です");
     }
@@ -277,15 +277,13 @@ function buildProject(
     if (input.platform !== "windows") {
       throw new Error("Windows targetにはwindows package inputが必要です");
     }
-    config = windowsBuilder(input, target, repository, tag);
+    config = windowsBuilder(input, request.target, repository, tag, request.timestampUrl);
   }
   const builderContents = stringifyYaml(config);
   writeExclusive(join(outputRoot, "electron-builder.yml"), builderContents);
-  const expected = ["package.json", "electron-builder.yml"];
-  if (target === "macos" && input.platform === "macos") {
+  if (request.target === "macos" && input.platform === "macos") {
     if (input.macos.entitlements != undefined) {
       copyInputFile(inputRoot, input.macos.entitlements, join(outputRoot, MAC_ENTITLEMENTS_FILE));
-      expected.push(MAC_ENTITLEMENTS_FILE);
     }
     if (input.macos.entitlementsInherit != undefined) {
       copyInputFile(
@@ -293,46 +291,28 @@ function buildProject(
         input.macos.entitlementsInherit,
         join(outputRoot, MAC_ENTITLEMENTS_INHERIT_FILE)
       );
-      expected.push(MAC_ENTITLEMENTS_INHERIT_FILE);
     }
   }
-  return expected;
 }
 
 /** package-inputから署名用の一時package projectを生成します。 */
-export function createPackageProject(
-  packageInputDirectory: string,
-  target: PackageProjectTarget,
-  repository: string,
-  tag: string,
-  outputDirectory: string
-): void {
-  if (typeof packageInputDirectory !== "string" || packageInputDirectory.length === 0) {
+export function createPackageProject(request: PackageProjectRequest): void {
+  if (
+    typeof request.packageInputDirectory !== "string" ||
+    request.packageInputDirectory.length === 0
+  ) {
     throw new Error("package-input-directoryが不正です");
   }
-  if (target !== "macos" && target !== "windows-nsis" && target !== "windows-nsis-web") {
-    throw new Error("targetが不正です");
-  }
-  const parsedRepository = parseRepository(repository);
-  const parsedTag = parseGitTag(tag);
-  if (typeof outputDirectory !== "string" || outputDirectory.length === 0) {
+  if (typeof request.outputDirectory !== "string" || request.outputDirectory.length === 0) {
     throw new Error("output-directoryが不正です");
   }
-  const inputRoot = resolve(packageInputDirectory);
+  const inputRoot = resolve(request.packageInputDirectory);
   assertDirectory(inputRoot, "package-input directoryがディレクトリではありません");
   const input = parsePackageInput(readJson(join(inputRoot, "package-input.json")));
-  validateInputPlatform(input, target);
-  const outputRoot = createOutputDirectory(outputDirectory);
+  validateInputPlatform(input, request.target);
+  const outputRoot = createOutputDirectory(request.outputDirectory);
   try {
-    const expected = buildProject(
-      inputRoot,
-      outputRoot,
-      input,
-      target,
-      parsedRepository,
-      parsedTag
-    );
-    assertProjectFiles(outputRoot, expected);
+    buildProject(inputRoot, outputRoot, input, request, request.repository, request.tag);
   } catch (error) {
     try {
       rmSync(outputRoot, { recursive: true });

@@ -1,5 +1,5 @@
 import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -9,7 +9,6 @@ import {
   parseAppId,
   parseArtifactName,
   parseExecutableName,
-  parsePackageInput,
   parsePackageManager,
   parseSemVer,
   parseRelativePath
@@ -37,7 +36,7 @@ const targetSchema = z.union([
       target: z.string().optional(),
       arch: z.union([z.string(), z.array(z.string())]).optional()
     })
-    .passthrough()
+    .strict()
 ]);
 const targetListSchema = z.union([targetSchema, z.array(targetSchema)]);
 const sourceMacSchema = z
@@ -81,7 +80,7 @@ const sourceNsisSchema = z
     artifactName: z.string().optional(),
     guid: z.string().optional()
   })
-  .passthrough();
+  .strict();
 const sourceBuilderSchema = z
   .object({
     appId: z.string().optional(),
@@ -94,8 +93,59 @@ const sourceBuilderSchema = z
   })
   .passthrough();
 
-type SourceBuilder = z.infer<typeof sourceBuilderSchema>;
 type SourceNsis = z.infer<typeof sourceNsisSchema>;
+type SourceMac = z.infer<typeof sourceMacSchema>;
+type SourceWin = z.infer<typeof sourceWinSchema>;
+type WindowsPackageInput = Extract<PackageInput, { platform: "windows" }>;
+type MacosPackageInput = Extract<PackageInput, { platform: "macos" }>;
+type PackageNsisOptions = NonNullable<WindowsPackageInput["windows"]["nsis"]>;
+
+const sourceProductNameSchema = z
+  .string()
+  .min(1)
+  .refine((value) => value.trim() === value)
+  .refine(
+    (value) =>
+      !value.includes("/") &&
+      !value.includes("\\") &&
+      [...value].every((character) => {
+        const code = character.codePointAt(0);
+        return (
+          code != undefined && code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f)
+        );
+      })
+  );
+const sourceFileNameSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) =>
+      value !== "." &&
+      value !== ".." &&
+      !value.includes("/") &&
+      !value.includes("\\") &&
+      !value.includes(":") &&
+      !value.includes("\u0000") &&
+      [...value].every((character) => {
+        const code = character.codePointAt(0);
+        return (
+          code != undefined && code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f)
+        );
+      })
+  );
+const sourceGuidSchema = z
+  .string()
+  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+type ParsedSourceBuilder = {
+  appId: string;
+  productName: string;
+  artifactName?: string;
+  mac?: SourceMac;
+  win?: SourceWin;
+  nsis?: SourceNsis;
+  nsisWeb?: SourceNsis;
+};
 
 function globalPublisherName(): string | undefined {
   const centralRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -201,14 +251,20 @@ function parseSourcePackage(path: string): { name: string; version: string } {
   return { name, version };
 }
 
-function parseSourceBuilder(path: string): SourceBuilder {
+function parseSourceBuilder(path: string): ParsedSourceBuilder {
   const value = sourceBuilderSchema.parse(readYaml(path));
   if (value.appId == undefined || value.productName == undefined) {
     throw new Error("electron-builder設定のappIdとproductNameが必要です");
   }
-  parseAppId(value.appId);
-  z.string().min(1).parse(value.productName);
-  return value;
+  return {
+    appId: parseAppId(value.appId),
+    productName: sourceProductNameSchema.parse(value.productName),
+    ...(value.artifactName == undefined ? {} : { artifactName: value.artifactName }),
+    ...(value.mac == undefined ? {} : { mac: value.mac }),
+    ...(value.win == undefined ? {} : { win: value.win }),
+    ...(value.nsis == undefined ? {} : { nsis: value.nsis }),
+    ...(value.nsisWeb == undefined ? {} : { nsisWeb: value.nsisWeb })
+  };
 }
 
 function targetArchitectures(value: z.infer<typeof targetListSchema> | undefined): string[] {
@@ -351,114 +407,57 @@ function validateMacPrepackaged(
   }
 }
 
-function isPeFile(contents: Buffer): boolean {
-  if (contents.length < 0x40 || contents.readUInt16LE(0) !== 0x5a4d) {
-    return false;
-  }
-  const peOffset = contents.readUInt32LE(0x3c);
-  return (
-    peOffset + 4 <= contents.length &&
-    contents.subarray(peOffset, peOffset + 4).equals(Buffer.from("PE\u0000\u0000"))
-  );
+function validateWindowsPrepackaged(prepackagedRoot: string, executableName: string): void {
+  const executablePath = join(prepackagedRoot, `${executableName}.exe`);
+  assertRegularFile(executablePath, "prepackagedの主exeがregular fileではありません");
 }
 
-function readUtf16Strings(contents: Buffer): string[] {
-  const result: string[] = [];
-  for (let index = 0; index + 2 < contents.length; index += 2) {
-    let end = index;
-    while (end + 1 < contents.length && contents.readUInt16LE(end) !== 0) {
-      end += 2;
-    }
-    if (end === index || end - index < 4) {
-      continue;
-    }
-    const text = contents.subarray(index, end).toString("utf16le");
-    if (/^[\u0020-\u007e]{2,255}$/u.test(text)) {
-      result.push(text);
-    }
-    index = end;
-  }
-  return result;
-}
-
-function versionInfoValue(strings: string[], key: string): string | undefined {
-  const index = strings.indexOf(key);
-  return index < 0 ? undefined : strings[index + 1];
-}
-
-function validateWindowsPrepackaged(
-  prepackagedRoot: string,
-  executableName: string | undefined,
-  productName: string
-): void {
-  const entries = readdirSync(prepackagedRoot, { withFileTypes: true });
-  const executableEntries = entries.filter(
-    (entry) =>
-      entry.isFile() && !entry.isSymbolicLink() && extname(entry.name).toLowerCase() === ".exe"
-  );
-  if (executableEntries.length === 0) {
-    throw new Error("prepackaged directoryにexeがありません");
-  }
-  const peEntries = executableEntries.filter((entry) =>
-    isPeFile(readRegularFile(join(prepackagedRoot, entry.name), "exeを読み込めません"))
-  );
-  const matchingEntries =
-    executableName == undefined
-      ? peEntries
-      : peEntries.filter(
-          (entry) => entry.name.toLowerCase() === `${executableName}.exe`.toLowerCase()
-        );
-  const mainEntry = matchingEntries.length === 1 ? matchingEntries[0] : undefined;
-  if (mainEntry == undefined) {
-    throw new Error("prepackagedの主exeを一意に決定できません");
-  }
-  const contents = readRegularFile(join(prepackagedRoot, mainEntry.name), "主exeを読み込めません");
-  if (!isPeFile(contents)) {
-    throw new Error("主exeがPE fileではありません");
-  }
-  const strings = readUtf16Strings(contents);
-  const versionInfoProductName = versionInfoValue(strings, "ProductName");
-  if (versionInfoProductName == undefined) {
-    throw new Error("主exeのVersionInfo ProductNameがありません");
-  }
-  if (versionInfoProductName !== productName) {
-    throw new Error("主exeのVersionInfo ProductNameがpackage inputと一致しません");
-  }
-  const originalFilename = versionInfoValue(strings, "OriginalFilename");
-  if (originalFilename == undefined) {
-    throw new Error("主exeのVersionInfo OriginalFilenameがありません");
-  }
-  const expectedFilename = executableName == undefined ? mainEntry.name : `${executableName}.exe`;
-  if (originalFilename.toLowerCase() !== expectedFilename.toLowerCase()) {
-    throw new Error("主exeのVersionInfo OriginalFilenameがsource executableNameと一致しません");
-  }
-}
-
-function nsisOptions(value: SourceNsis | undefined): Record<string, unknown> | undefined {
+function nsisOptions(value: SourceNsis | undefined): PackageNsisOptions | undefined {
   if (value == undefined) {
     return undefined;
   }
-  const parsed: Record<string, unknown> = {};
-  const allowedKeys = new Set([
-    "oneClick",
-    "perMachine",
-    "allowToChangeInstallationDirectory",
-    "allowElevation",
-    "createDesktopShortcut",
-    "createStartMenuShortcut",
-    "createQuickLaunchShortcut",
-    "shortcutName",
-    "menuCategory",
-    "uninstallDisplayName",
-    "deleteAppDataOnUninstall",
-    "runAfterFinish",
-    "artifactName",
-    "guid"
-  ]);
-  for (const [key, item] of Object.entries(value)) {
-    if (allowedKeys.has(key) && item != undefined) {
-      parsed[key] = item;
-    }
+  const parsed: PackageNsisOptions = {};
+  if (value.oneClick != undefined) {
+    parsed.oneClick = value.oneClick;
+  }
+  if (value.perMachine != undefined) {
+    parsed.perMachine = value.perMachine;
+  }
+  if (value.allowToChangeInstallationDirectory != undefined) {
+    parsed.allowToChangeInstallationDirectory = value.allowToChangeInstallationDirectory;
+  }
+  if (value.allowElevation != undefined) {
+    parsed.allowElevation = value.allowElevation;
+  }
+  if (value.createDesktopShortcut != undefined) {
+    parsed.createDesktopShortcut = value.createDesktopShortcut;
+  }
+  if (value.createStartMenuShortcut != undefined) {
+    parsed.createStartMenuShortcut = value.createStartMenuShortcut;
+  }
+  if (value.createQuickLaunchShortcut != undefined) {
+    parsed.createQuickLaunchShortcut = value.createQuickLaunchShortcut;
+  }
+  if (value.shortcutName != undefined) {
+    parsed.shortcutName = sourceFileNameSchema.parse(value.shortcutName);
+  }
+  if (value.menuCategory != undefined) {
+    parsed.menuCategory = sourceFileNameSchema.parse(value.menuCategory);
+  }
+  if (value.uninstallDisplayName != undefined) {
+    parsed.uninstallDisplayName = sourceProductNameSchema.parse(value.uninstallDisplayName);
+  }
+  if (value.deleteAppDataOnUninstall != undefined) {
+    parsed.deleteAppDataOnUninstall = value.deleteAppDataOnUninstall;
+  }
+  if (value.runAfterFinish != undefined) {
+    parsed.runAfterFinish = value.runAfterFinish;
+  }
+  if (value.artifactName != undefined) {
+    parsed.artifactName = parseArtifactName(value.artifactName);
+  }
+  if (value.guid != undefined) {
+    parsed.guid = sourceGuidSchema.parse(value.guid);
   }
   return parsed;
 }
@@ -473,14 +472,14 @@ function parseOptionalArtifactName(value: string | undefined): string | undefine
 function buildMacInput(
   sourceRoot: string,
   sourcePackage: { name: string; version: string },
-  builder: SourceBuilder,
+  builder: ParsedSourceBuilder,
   prepackagedRoot: string,
   outputRoot: string
 ): PackageInput {
   const mac = builder.mac;
   const architecture = resolveArchitecture(mac?.target, "macos");
-  const appId = parseAppId(builder.appId ?? "");
-  const productName = z.string().min(1).parse(builder.productName);
+  const appId = builder.appId;
+  const productName = builder.productName;
   validateMacPrepackaged(prepackagedRoot, appId, productName, sourcePackage.version);
   const entitlements = mac?.entitlements;
   const entitlementsInherit = mac?.entitlementsInherit;
@@ -499,7 +498,7 @@ function buildMacInput(
     copyInputFile(sourceRoot, entitlementsInherit, join(outputRoot, "entitlements-inherit.plist"));
   }
   const artifactName = parseOptionalArtifactName(mac?.artifactName ?? builder.artifactName);
-  const macInput = {
+  const macosOptions: MacosPackageInput["macos"] = {
     architecture,
     ...(artifactName == undefined ? {} : { artifactName }),
     ...(entitlements == undefined ? {} : { entitlements: "entitlements.plist" }),
@@ -509,44 +508,52 @@ function buildMacInput(
     ...(mac?.hardenedRuntime == undefined ? {} : { hardenedRuntime: mac.hardenedRuntime }),
     ...(mac?.gatekeeperAssess == undefined ? {} : { gatekeeperAssess: mac.gatekeeperAssess })
   };
-  return parsePackageInput({
+  const macInput: MacosPackageInput = {
     platform: "macos",
     name: sourcePackage.name,
     version: sourcePackage.version,
     appId,
     productName,
-    macos: macInput
-  });
+    macos: macosOptions
+  };
+  return macInput;
 }
 
 function buildWindowsInput(
   sourcePackage: { name: string; version: string },
-  builder: SourceBuilder,
+  builder: ParsedSourceBuilder,
   prepackagedRoot: string
 ): PackageInput {
   const win = builder.win;
-  const appId = parseAppId(builder.appId ?? "");
-  const productName = z.string().min(1).parse(builder.productName);
-  const architecture = resolveArchitecture(win?.target, "windows");
+  if (win == undefined || win.executableName == undefined) {
+    throw new Error("WindowsのexecutableNameが必要です");
+  }
+  const appId = builder.appId;
+  const productName = builder.productName;
+  const architecture = resolveArchitecture(win.target, "windows");
   if (architecture !== "x64") {
     throw new Error("Windows architectureはx64でなければなりません");
   }
-  const executableName =
-    win?.executableName == undefined ? undefined : parseExecutableName(win.executableName);
-  validateWindowsPrepackaged(prepackagedRoot, executableName, productName);
+  const executableName = parseExecutableName(win.executableName);
+  validateWindowsPrepackaged(prepackagedRoot, executableName);
   const nsis = nsisOptions(builder.nsis);
   const nsisWeb = nsisOptions(builder.nsisWeb);
-  const sourceGuid = builder.nsis?.guid ?? builder.nsisWeb?.guid;
-  if (
-    builder.nsis?.guid != undefined &&
-    builder.nsisWeb?.guid != undefined &&
-    builder.nsis.guid !== builder.nsisWeb.guid
-  ) {
+  const nsisGuid =
+    builder.nsis?.guid == undefined ? undefined : sourceGuidSchema.parse(builder.nsis.guid);
+  const nsisWebGuid =
+    builder.nsisWeb?.guid == undefined ? undefined : sourceGuidSchema.parse(builder.nsisWeb.guid);
+  if (nsisGuid != undefined && nsisWebGuid != undefined && nsisGuid !== nsisWebGuid) {
     throw new Error("NSISとNSIS WebのGUIDが一致しません");
   }
-  const artifactName = parseOptionalArtifactName(win?.artifactName ?? builder.artifactName);
-  const sourcePublisherName = win?.publisherName;
-  const configuredPublisherName = globalPublisherName();
+  const sourceGuid = nsisGuid ?? nsisWebGuid;
+  const artifactName = parseOptionalArtifactName(win.artifactName ?? builder.artifactName);
+  const sourcePublisherName =
+    win.publisherName == undefined ? undefined : sourceProductNameSchema.parse(win.publisherName);
+  const configuredPublisherNameValue = globalPublisherName();
+  const configuredPublisherName =
+    configuredPublisherNameValue == undefined
+      ? undefined
+      : sourceProductNameSchema.parse(configuredPublisherNameValue);
   if (sourcePublisherName != undefined && configuredPublisherName == undefined) {
     throw new Error("source publisherNameを照合するglobal signing displayNameがありません");
   }
@@ -557,30 +564,28 @@ function buildWindowsInput(
   ) {
     throw new Error("source publisherNameとglobal signing displayNameが一致しません");
   }
-  const windowsInput = {
+  const windowsInput: WindowsPackageInput["windows"] = {
     architecture,
-    ...(executableName == undefined ? {} : { executableName }),
+    executableName,
     ...(configuredPublisherName == undefined ? {} : { publisherName: configuredPublisherName }),
     ...(artifactName == undefined ? {} : { artifactName }),
     ...(sourceGuid == undefined
       ? {}
       : {
-          guid: z
-            .string()
-            .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
-            .parse(sourceGuid)
+          guid: sourceGuid
         }),
     ...(nsis == undefined ? {} : { nsis }),
     ...(nsisWeb == undefined ? {} : { nsisWeb })
   };
-  return parsePackageInput({
+  const packageInput: WindowsPackageInput = {
     platform: "windows",
     name: sourcePackage.name,
     version: sourcePackage.version,
     appId,
     productName,
     windows: windowsInput
-  });
+  };
+  return packageInput;
 }
 
 /** sourceのpackage.jsonとbuilder設定、prepackaged本体から一時package inputを作成します。 */

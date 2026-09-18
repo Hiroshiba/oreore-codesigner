@@ -235,7 +235,7 @@ const macosInputSchema = z
 const windowsInputSchema = z
   .object({
     architecture: z.literal("x64"),
-    executableName: executableNameSchema.optional(),
+    executableName: executableNameSchema,
     publisherName: productNameSchema.optional(),
     artifactName: artifactNameSchema.optional(),
     guid: uuidSchema.optional(),
