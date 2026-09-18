@@ -1,174 +1,132 @@
+import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { loadJsonFile, writeJsonFile } from "./config.js";
+import { z } from "zod";
+import { createPackageInput } from "./package-input.js";
 import { createPackageProject } from "./package-project.js";
-import { createPublishPlan } from "./publish-plan.js";
-import { assertReleaseSetComplete, createReleaseManifest } from "./release-manifest.js";
-import { prepareContract, validateSource } from "./source-validation.js";
+import { validateReleaseAssets } from "./release-assets.js";
 
-type Command =
-  | "prepare"
-  | "validate-source"
-  | "create-package-project"
-  | "create-release-manifest"
-  | "plan-publish";
+const commandSchema = z.enum([
+  "create-package-input",
+  "create-package-project",
+  "validate-release-assets"
+]);
+const pathSchema = z.string().min(1, "pathを空にできません");
+const platformSchema = z.enum(["macos", "windows"]);
+const targetSchema = z.enum(["macos", "windows-nsis", "windows-nsis-web"]);
 
-function parseCommand(value: string): Command {
-  if (
-    value !== "prepare" &&
-    value !== "validate-source" &&
-    value !== "create-package-project" &&
-    value !== "create-release-manifest" &&
-    value !== "plan-publish"
-  ) {
-    throw new Error(`未知のsubcommandです: ${value}`);
-  }
-  return value;
+const inputOptionsSchema = z
+  .object({
+    "source-directory": pathSchema,
+    "prepackaged-directory": pathSchema,
+    platform: platformSchema,
+    "output-directory": pathSchema
+  })
+  .strict();
+const projectOptionsSchema = z
+  .object({
+    "package-input-directory": pathSchema,
+    target: targetSchema,
+    repository: z
+      .string()
+      .regex(
+        /^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$/,
+        "repositoryはowner/name形式で指定してください"
+      ),
+    tag: z.string().min(1, "tagを空にできません"),
+    "output-directory": pathSchema
+  })
+  .strict();
+const assetsOptionsSchema = z
+  .object({
+    "assets-directory": pathSchema,
+    "expected-version": z.string().min(1, "expected-versionを空にできません")
+  })
+  .strict();
+
+type ParsedOptions = Record<string, string>;
+
+function parseCommand(value: string | undefined): z.infer<typeof commandSchema> {
+  return commandSchema.parse(value);
 }
 
-function parseOptions(args: string[]): { command: Command; options: Map<string, string> } {
-  const commandValue = args[0];
-  if (commandValue === undefined) {
-    throw new Error("subcommandが必要です");
+function parseOptions(args: string[]): {
+  command: z.infer<typeof commandSchema>;
+  options: ParsedOptions;
+} {
+  const parsed = parseArgs({
+    args,
+    options: {
+      "source-directory": { type: "string", multiple: true },
+      "prepackaged-directory": { type: "string", multiple: true },
+      platform: { type: "string", multiple: true },
+      "output-directory": { type: "string", multiple: true },
+      "package-input-directory": { type: "string", multiple: true },
+      target: { type: "string", multiple: true },
+      repository: { type: "string", multiple: true },
+      tag: { type: "string", multiple: true },
+      "assets-directory": { type: "string", multiple: true },
+      "expected-version": { type: "string", multiple: true }
+    },
+    allowPositionals: true,
+    strict: true
+  });
+  if (parsed.positionals.length !== 1) {
+    throw new Error("subcommandは一つだけ指定してください");
   }
-  const command = parseCommand(commandValue);
-  const options = new Map<string, string>();
-  let index = 1;
-  while (index < args.length) {
-    const option = args[index];
-    if (option === undefined || !option.startsWith("--")) {
-      throw new Error("optionは--で始めてください");
+  const command = parseCommand(parsed.positionals[0]);
+  const options: ParsedOptions = {};
+  for (const [key, value] of Object.entries(parsed.values)) {
+    if (!Array.isArray(value) || value.length !== 1) {
+      throw new Error(`optionが重複または不正です: --${key}`);
     }
-    const optionName = option.slice(2);
-    if (optionName.length === 0 || options.has(optionName)) {
-      throw new Error(`optionが重複または空です: ${option}`);
+    const optionValue = value[0];
+    if (optionValue === undefined) {
+      throw new Error(`optionの値がありません: --${key}`);
     }
-    const value = args[index + 1];
-    if (value === undefined || value.startsWith("--")) {
-      throw new Error(`optionの値がありません: ${option}`);
-    }
-    options.set(optionName, value);
-    index += 2;
+    options[key] = optionValue;
   }
   return { command, options };
 }
 
-function assertAllowedOptions(options: Map<string, string>, allowed: string[]): void {
-  const allowedSet = new Set(allowed);
-  for (const name of options.keys()) {
-    if (!allowedSet.has(name)) {
-      throw new Error(`このsubcommandでは使えないoptionです: --${name}`);
-    }
-  }
-}
-
-function requiredOption(options: Map<string, string>, name: string): string {
-  const value = options.get(name);
-  if (value === undefined || value.length === 0) {
-    throw new Error(`optionが必要です: --${name}`);
-  }
-  return value;
-}
-
-function parseBoolean(value: string): boolean {
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  throw new Error("replace-existing-assetsはtrueまたはfalseで指定してください");
-}
-
-function executePrepare(options: Map<string, string>): void {
-  assertAllowedOptions(options, ["app-id", "tag", "replace-existing-assets", "output"]);
-  const contract = prepareContract(
-    process.cwd(),
-    requiredOption(options, "app-id"),
-    requiredOption(options, "tag"),
-    parseBoolean(requiredOption(options, "replace-existing-assets"))
+function executeCreatePackageInput(options: ParsedOptions): void {
+  const parsed = inputOptionsSchema.parse(options);
+  createPackageInput(
+    parsed["source-directory"],
+    parsed["prepackaged-directory"],
+    parsed.platform,
+    parsed["output-directory"]
   );
-  writeJsonFile(requiredOption(options, "output"), contract);
 }
 
-function executeValidateSource(options: Map<string, string>): void {
-  assertAllowedOptions(options, ["contract", "source-directory", "output"]);
-  const contract = loadJsonFile(requiredOption(options, "contract"));
-  const releaseContract = validateSource(
-    process.cwd(),
-    contract,
-    requiredOption(options, "source-directory")
-  );
-  writeJsonFile(requiredOption(options, "output"), releaseContract);
-}
-
-function executeCreatePackageProject(options: Map<string, string>): void {
-  assertAllowedOptions(options, ["contract", "target", "output-directory"]);
-  const contract = loadJsonFile(requiredOption(options, "contract"));
-  const targetValue = requiredOption(options, "target");
-  if (
-    targetValue !== "macos" &&
-    targetValue !== "windows-nsis" &&
-    targetValue !== "windows-nsis-web"
-  ) {
-    throw new Error("targetはmacos、windows-nsis、windows-nsis-webのいずれかです");
-  }
+function executeCreatePackageProject(options: ParsedOptions): void {
+  const parsed = projectOptionsSchema.parse(options);
   createPackageProject(
-    process.cwd(),
-    contract,
-    targetValue,
-    requiredOption(options, "output-directory")
+    parsed["package-input-directory"],
+    parsed.target,
+    parsed.repository,
+    parsed.tag,
+    parsed["output-directory"]
   );
 }
 
-function executeCreateManifest(options: Map<string, string>): void {
-  assertAllowedOptions(options, ["contract", "assets-directory", "output"]);
-  const contract = loadJsonFile(requiredOption(options, "contract"));
-  const manifest = createReleaseManifest(
-    process.cwd(),
-    contract,
-    requiredOption(options, "assets-directory")
-  );
-  writeJsonFile(requiredOption(options, "output"), manifest);
+function executeValidateReleaseAssets(options: ParsedOptions): void {
+  const parsed = assetsOptionsSchema.parse(options);
+  validateReleaseAssets(parsed["assets-directory"], parsed["expected-version"]);
 }
 
-function executePlanPublish(options: Map<string, string>): void {
-  assertAllowedOptions(options, [
-    "contract",
-    "manifest",
-    "remote-assets",
-    "assets-directory",
-    "output"
-  ]);
-  const contract = loadJsonFile(requiredOption(options, "contract"));
-  const manifest = loadJsonFile(requiredOption(options, "manifest"));
-  const remoteAssets = loadJsonFile(requiredOption(options, "remote-assets"));
-  const assetsDirectory = requiredOption(options, "assets-directory");
-  assertReleaseSetComplete(manifest);
-  const plan = createPublishPlan(process.cwd(), contract, manifest, remoteAssets, assetsDirectory);
-  writeJsonFile(requiredOption(options, "output"), plan);
-}
-
-/** CLI引数を検証して中央署名の一連の処理を実行します。 */
+/** CLI引数を検証してpackage input、package project、asset検証を実行します。 */
 export function runCli(args: string[]): void {
   const { command, options } = parseOptions(args);
-  if (command === "prepare") {
-    executePrepare(options);
-    return;
-  }
-  if (command === "validate-source") {
-    executeValidateSource(options);
+  if (command === "create-package-input") {
+    executeCreatePackageInput(options);
     return;
   }
   if (command === "create-package-project") {
     executeCreatePackageProject(options);
     return;
   }
-  if (command === "create-release-manifest") {
-    executeCreateManifest(options);
-    return;
-  }
-  executePlanPublish(options);
+  executeValidateReleaseAssets(options);
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
