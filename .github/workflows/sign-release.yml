@@ -108,7 +108,7 @@ jobs:
           printf 'sha=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
       - name: prepared contractをartifact化
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: central-${{ github.run_id }}-${{ steps.contract.outputs.app_id }}-prepare
           if-no-files-found: error
@@ -172,7 +172,7 @@ jobs:
             "$RUNNER_TEMP/source-output/source-manifest.json"
 
       - name: source archiveをartifact化
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
           if-no-files-found: error
@@ -245,7 +245,7 @@ jobs:
           cp -- "$RUNNER_TEMP/unsigned-app.tar" "$RUNNER_TEMP/build-output/unsigned-app.tar"
 
       - name: macOS build artifactを保存
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-macos-build
           if-no-files-found: error
@@ -316,7 +316,7 @@ jobs:
           Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'unsigned-app.tar') -Destination (Join-Path $buildOutput 'unsigned-app.tar')
 
       - name: Windows build artifactを保存
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-windows-build
           if-no-files-found: error
@@ -380,7 +380,7 @@ jobs:
             "$RUNNER_TEMP/designated-requirement.txt"
 
       - name: macOS signed artifactを保存
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-macos-signed
           if-no-files-found: error
@@ -440,7 +440,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows signingに失敗しました' }
 
       - name: Windows signed artifactを保存
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-windows-signed
           if-no-files-found: error
@@ -509,7 +509,7 @@ jobs:
             "$RUN_URL"
 
       - name: release setをartifact化
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-release
           if-no-files-found: error
@@ -616,7 +616,7 @@ jobs:
 
       - name: publish recoveryをartifact化
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-publish-recovery
           if-no-files-found: error
