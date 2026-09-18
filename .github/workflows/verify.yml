@@ -45,6 +45,9 @@ jobs:
       - name: typecheckを検証
         run: pnpm typecheck
 
+      - name: buildを検証
+        run: pnpm build
+
       - name: workflowとactionを検証
         shell: bash
         run: |
