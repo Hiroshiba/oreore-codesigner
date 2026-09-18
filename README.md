@@ -1,51 +1,88 @@
-# 個人用アプリの中央署名基盤
+# 個人用 Electron アプリを中央で署名・公開する
 
-複数の Electron アプリを、共通の自己署名証明書で署名して各アプリの GitHub Release へ公開するためのリポジトリです。
-秘密鍵をここに集約し、ソースの取得、秘密情報を使わないビルド、署名、公開を別々のジョブで実行します。
+自分で管理する複数の Electron アプリを、共通の GitHub Actions ワークフローで署名し、各アプリの指定済み GitHub Release へ公開するためのリポジトリです。
+macOS と Windows にそれぞれ自己管理の署名証明書を用意し、秘密鍵と GitHub App の設定を中央へ集約します。
+アプリごとのリポジトリに署名鍵を置く必要はありません。
 
-macOS は DMG で初回導入し、ZIP で更新します。
-Windows は WebSetup で初回導入し、通常の NSIS インストーラーで更新します。
+初回導入とアプリ内更新では、次の配布形式を使います。
 更新にはアプリ側への `electron-updater` の組み込みが必要です。
-署名済みファイルを公開するだけでは、自動更新は有効になりません。
+
+| OS      | 初回導入             | アプリ内更新               |
+| ------- | -------------------- | -------------------------- |
+| macOS   | DMG                  | ZIP と更新メタデータ       |
+| Windows | NSIS Web の WebSetup | 通常 NSIS と更新メタデータ |
+
+初めて使うときは、「静的検査と運用時の動作確認を分ける」まで読み、導入手順に沿って設定を進めてください。
+末尾の参照先は、個別の操作が必要になったときに開きます。
+
+## 自己署名の制約を確認してから導入する
 
 自己署名は、OS の標準審査や公的なコード署名の代替にはなりません。
-macOS では最初の端末操作が残り、Windows では証明書を信頼済みにしても SmartScreen の警告が残ることがあります。
-Smart App Control が強制されている Windows は対象外です。
-Gatekeeper や Windows の保護設定全体を無効にする手順は提供しません。
+Windows は、自己署名証明書を端末へ登録するだけでは SmartScreen や Smart App Control を必ず通過できるわけではありません。
+Smart App Control が強制されている端末は対象外です。
+macOS でも、初回起動には本人による個別許可が必要になることがあります。
+Gatekeeper や Windows の保護設定全体を無効にする運用は行いません。
 
-## 導入する順序
+macOS で証明書単位の実行許可を試す system policy profile は、[experimental 配下の実験](experimental/macos-system-policy-profile/README.md)です。
+現行 macOS の実機で規則の適用を確認するまで、標準の導入手順には含めません。
 
-1. [構成と信頼境界](docs/architecture.md)を読み、対象端末と運用範囲を確認します。
-2. [GitHub の初期設定](docs/github-setup.md)に従い、GitHub App、中央の Secrets、公開承認を設定します。
-3. [アプリ側の契約](docs/app-contract.md)を満たすように対象アプリを準備します。
-4. [運用手順](docs/operations.md)に従い、公開証明書情報とアプリを中央設定へ登録します。
-5. [端末の初期設定](docs/device-setup.md)を行い、[検証項目](docs/verification.md)を実機で確認します。
-6. 検証結果を確認してから、対象アプリの既存 Release へ署名済み成果物を公開します。
+## ソースの実行と署名・公開の権限を分ける
 
-公開ワークフローは [.github/workflows/sign-release.yml](.github/workflows/sign-release.yml) です。
-既定ブランチから実行し、入力は `app_id`、`tag`、`replace_existing_assets` だけです。
-取得先リポジトリや実行コマンドは、中央の `config/apps.json` によって制限します。
-公開先の Release はアプリのリポジトリにあらかじめ作成してください。
-中央ワークフローは Release 自体を作成せず、タイトル、本文、タグも変更しません。
-公開失敗時は変更のロールバックを試み、完了できない場合は復旧用 Actions artifact を使います。
-復旧資料の保持期間は 90 日です。[運用手順](docs/operations.md)で確認方法を説明しています。
+中央の [sign-release ワークフロー](.github/workflows/sign-release.yml)は、ソース取得、ビルド、OS 別の署名と梱包、成果物の検証、公開を別々のジョブで実行します。
+ソース取得では GitHub App の読み取り用トークンで対象リポジトリだけにアクセスし、指定タグをコミット SHA に固定します。
+アプリ側のコードを実行するビルドジョブには、署名鍵、App の秘密鍵、公開用トークンを渡しません。
 
-## 初期状態と検証状況
+署名ジョブはビルド成果物を検査し、それぞれの OS の鍵を使って署名・梱包します。
+ここではアプリ側のビルドスクリプトや生成されたアプリを実行しません。
+`assemble-release` は鍵や公開用トークンを持たず、配布ファイルと更新メタデータの整合性を確認します。
+検証を通った成果物だけを、公開ジョブが対象リポジトリに限定した書き込み用トークンで Release へ追加します。
+各段階の検証内容と隔離条件は[構成と信頼境界](docs/architecture.md)にまとめています。
 
-`config/apps.json` のアプリ一覧は空で、`config/signing.json` の証明書情報も未設定です。
-証明書とアプリを登録するまで公開処理は実行できません。
-調査例の `hiho-cli-audio` と `hiho-task-management-ai` は、現時点ではアプリ側の契約を満たしておらず、登録していません。
-これらは登録に必要な作業を示す例で、アプリ側のソース変更はこのリポジトリの変更に含みません。
+## 証明書とアプリを準備して既存 Release へ公開する
 
-[verify ワークフロー](.github/workflows/verify.yml)には静的検証と単体テストを定義しています。
-実際の GitHub Actions での verify と、実際の Secrets を使う署名・公開は未実施です。
-ローカルの検証結果を、これらの実行成功とは扱いません。
+初期状態の [config/apps.json](config/apps.json) はアプリ一覧が空で、[config/signing.json](config/signing.json) は両 OS とも `configured: false` です。
+登録が済むまで設定検証で停止し、署名・公開へ進みません。
+秘密鍵や証明書は、このリポジトリに含まれていません。
 
-macOS の自己署名 ZIP 更新、Windows のブラウザー経由で取得した WebSetup による初回導入、通常 NSIS による更新、両 OS の差分更新は実機未確認です。
-blockmap を公開して差分更新を試みますが、実機ログで成功を確認するまでは差分更新を保証しません。
-差分更新に失敗した場合は全量ダウンロードへ切り替わることが必要です。
-rolling tag の asset 公開と、固定タグからの自動更新は別の機能です。
-固定タグへ更新クライアントを接続する処理は中央に実装していないため、[アプリ側の契約](docs/app-contract.md)を確認してください。
+1. [GitHub の初期設定](docs/github-setup.md)に従い、GitHub App、署名証明書、中央の Secrets と Variables、署名・公開前の承認を設定します。
+2. [アプリ側の契約](docs/app-contract.md)を読み、固定した `appId`、`electron-updater` の接続、秘密情報を使わずに署名前のアプリ本体を出力するビルドを準備します。`electron-builder` は `26.16.1`、`electron-updater` は `6.8.9` に固定します。
+3. [運用手順](docs/operations.md)に従って対象アプリを中央設定へ登録し、アプリ側に公開先の Release を作成します。
+4. [端末の初期設定](docs/device-setup.md)を行い、[検証項目](docs/verification.md)を確認しながら検証用 Release で署名・公開、起動、旧版からの更新を確かめます。
 
-証明書単位の Gatekeeper 許可を試す構成プロファイルは、`experimental/macos-system-policy-profile/` の実験です。
-現行 macOS の実機で成立を確認するまで、標準の導入手順には含めません。
+公開時は中央リポジトリの既定ブランチからワークフローを実行し、`app_id` と `tag` を指定します。
+同名ファイルの置換に使う `replace_existing_assets` は、中央設定でも置換を許可した場合だけ有効です。
+中央は Release を新規作成せず、タイトル、本文、タグも変更しません。
+
+調査例の `hiho-cli-audio` と `hiho-task-management-ai` は接続済みのサンプルではなく、アプリ側の対応が必要です。
+このリポジトリには両アプリのソース変更を含めず、初期のアプリ一覧にも登録していません。
+署名済みファイルの公開だけでは、アプリ内更新は有効になりません。
+固定の rolling tag を更新先にする場合も、アプリ側で更新先を接続し、実機で確認する必要があります。
+
+## 静的検査と運用時の動作確認を分ける
+
+このリポジトリではテストコードを実装しない方針です。
+[verify ワークフロー](.github/workflows/verify.yml)は、format、lint、typecheck、build、ワークフローとシェル・PowerShell の構文など、静的検査だけを行います。
+実際の証明書を使った署名、GitHub Actions での公開、実機での起動と更新は、運用時に[検証項目](docs/verification.md)に沿って確認します。
+
+現時点では、実際の GitHub Actions、実際の証明書による署名・公開、実機での起動と更新は未実施です。
+ローカルの静的検査が通っても、これらの動作を確認したことにはなりません。
+差分更新も実機未確認です。差分取得の成功と、失敗時に全量ダウンロードで更新できることをログで確認してください。
+
+## 必要な操作の手順を参照する
+
+導入後の操作や詳しい仕様は、目的に合う文書を参照してください。
+
+| 確認したいこと                   | 参照先                                         |
+| -------------------------------- | ---------------------------------------------- |
+| 公開、同名ファイルの扱い、復旧   | [運用手順](docs/operations.md)                 |
+| 証明書の生成と公開証明書の登録   | [証明書ツール](scripts/certificates/README.md) |
+| 追加端末への導入と OS の警告     | [端末の初期設定](docs/device-setup.md)         |
+| 設定項目、ビルド出力、更新先     | [アプリ側の契約](docs/app-contract.md)         |
+| 権限、ジョブの隔離、成果物の検証 | [構成と信頼境界](docs/architecture.md)         |
+
+関連文書でいう「中央」はこのリポジトリ、「ソース」は対象アプリのリポジトリです。
+「契約」はアプリと中央が守る設定・ビルド出力の条件を指します。
+「Release set」は、同じバージョンの配布ファイルと更新メタデータをまとめた一式です。
+
+手順で解決しない疑問や不具合は、このリポジトリの [GitHub Issues](https://github.com/Hiroshiba/oreore-codesigner/issues)へ報告してください。
+秘密情報を含めず、対象 OS、アプリのバージョン、失敗した操作、確認できたログを添えてください。
