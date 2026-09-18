@@ -195,6 +195,9 @@ try {
   $packageInputPath = Join-Path $PackageInputDirectory 'package-input.json'
   Assert-RegularFile $packageInputPath 'package-input.jsonが生成されませんでした' | Out-Null
   $packageInput = Get-Content -LiteralPath $packageInputPath -Raw -ErrorAction Stop | ConvertFrom-Json
+  if ($packageInput.platform -cne 'windows' -or $packageInput.windows.architecture -cne 'x64') {
+    throw 'Windows package-inputのarchitectureはx64でなければなりません'
+  }
   $version = [string]$packageInput.version
   if ($version.Length -eq 0) {
     throw 'package-input.jsonのversionが空です'

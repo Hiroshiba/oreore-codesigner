@@ -188,6 +188,10 @@ if [[ ! -f "$package_input_path" || -L "$package_input_path" ]]; then
   printf '%s\n' 'package-input.jsonが生成されませんでした' >&2
   exit 1
 fi
+if ! jq -e '.platform == "macos" and .macos.architecture == "x64"' "$package_input_path" >/dev/null; then
+  printf '%s\n' 'macOS package-inputのarchitectureはx64でなければなりません' >&2
+  exit 1
+fi
 if ! version=$(jq -er '.version' "$package_input_path"); then
   printf '%s\n' 'package-input.jsonのversionを取得できません' >&2
   exit 1

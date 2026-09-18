@@ -68,22 +68,22 @@ esac
 EOF
 chmod 700 "$askpass_path"
 
-checkout_directory="$work_directory/source"
-git init --quiet "$checkout_directory"
-git -C "$checkout_directory" remote add origin "https://github.com/${repository}.git"
+repository_directory="$work_directory/source"
+git init --quiet "$repository_directory"
+git -C "$repository_directory" remote add origin "https://github.com/${repository}.git"
 tag_ref="refs/tags/$tag"
 if ! git check-ref-format "$tag_ref" >/dev/null; then
   printf '%s\n' 'tagがGit refとして不正です' >&2
   exit 1
 fi
 
-if ! GIT_ASKPASS="$askpass_path" GIT_TOKEN_PATH="$token_path" GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1 \
-  git -c credential.helper= -C "$checkout_directory" fetch --no-tags --depth=1 origin "$tag_ref:$tag_ref"; then
+if ! GIT_ASKPASS="$askpass_path" GIT_TOKEN_PATH="$token_path" GIT_TERMINAL_PROMPT=0 \
+  git -c credential.helper= -C "$repository_directory" fetch --no-tags --depth=1 origin "$tag_ref:$tag_ref"; then
   printf '%s\n' '対象sourceのtag取得に失敗しました' >&2
   exit 1
 fi
 
-if ! source_sha=$(git -C "$checkout_directory" rev-parse --verify "${tag_ref}^{commit}"); then
+if ! source_sha=$(git -C "$repository_directory" rev-parse --verify "${tag_ref}^{commit}"); then
   printf '%s\n' 'tagからcommit SHAを解決できませんでした' >&2
   exit 1
 fi
@@ -92,7 +92,7 @@ if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
   printf '%s\n' 'source SHAが40桁ではありません' >&2
   exit 1
 fi
-if ! commit_timestamp=$(git -C "$checkout_directory" show -s --format=%ct "$source_sha"); then
+if ! commit_timestamp=$(git -C "$repository_directory" show -s --format=%ct "$source_sha"); then
   printf '%s\n' 'commit timestampを取得できませんでした' >&2
   exit 1
 fi
@@ -101,32 +101,12 @@ if [[ ! "$commit_timestamp" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! git -C "$checkout_directory" checkout --quiet --detach "$source_sha"; then
-  printf '%s\n' 'source checkoutに失敗しました' >&2
-  exit 1
-fi
-if git -C "$checkout_directory" ls-tree -r --name-only "$source_sha" | grep -Eq '(^|/)\.gitmodules$'; then
-  printf '%s\n' '.gitmodulesは中央source契約でサポートしていません' >&2
-  exit 1
-fi
-if git -C "$checkout_directory" ls-tree -r --full-tree "$source_sha" | awk '$1 == "160000" { found = 1 } END { exit found ? 0 : 1 }'; then
-  printf '%s\n' 'submodule entryは中央source契約でサポートしていません' >&2
-  exit 1
-fi
-while IFS= read -r -d '' source_path; do
-  attribute=$(git -C "$checkout_directory" check-attr --cached filter -- "$source_path")
-  if [[ "$attribute" == *': lfs' ]]; then
-    printf 'Git LFS filterは中央source契約でサポートしていません: %s\n' "$source_path" >&2
-    exit 1
-  fi
-done < <(git -C "$checkout_directory" ls-files -z)
-
 mkdir -p -- "$(dirname -- "$archive_path")" "$(dirname -- "$github_output_path")"
 if [[ -e "$archive_path" || -L "$archive_path" ]]; then
   printf '%s\n' 'source archiveは開始時に存在してはいけません' >&2
   exit 1
 fi
-if ! GIT_LFS_SKIP_SMUDGE=1 git -C "$checkout_directory" archive \
+if ! git -C "$repository_directory" archive \
   --format=tar --prefix=source/ --mtime="@${commit_timestamp}" "$source_sha" >"$archive_path"; then
   printf '%s\n' 'source archiveの生成に失敗しました' >&2
   exit 1
@@ -149,7 +129,7 @@ if ! tar -tf "$archive_path" >"$archive_listing"; then
   printf '%s\n' 'source archiveの内容を確認できません' >&2
   exit 1
 fi
-if grep -Eq '(^|/)\.git(/|$)|(^|/)\.gitmodules$' "$archive_listing"; then
+if grep -Eq '(^|/)\.git(/|$)' "$archive_listing"; then
   printf '%s\n' 'source archiveにGit metadataが含まれています' >&2
   exit 1
 fi
