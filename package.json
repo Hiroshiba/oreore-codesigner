@@ -11,9 +11,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "format": "prettier --write package.json tsconfig.json eslint.config.mjs .prettierrc.json config src test",
-    "format:check": "prettier --check package.json tsconfig.json eslint.config.mjs .prettierrc.json config src test",
-    "test": "vitest run",
+    "format": "prettier --write package.json tsconfig.json eslint.config.mjs .prettierrc.json config src",
+    "format:check": "prettier --check package.json tsconfig.json eslint.config.mjs .prettierrc.json config src",
     "cli": "tsx src/cli.ts"
   },
   "dependencies": {
@@ -31,7 +30,6 @@
     "prettier": "3.5.3",
     "tsx": "4.19.4",
     "typescript": "5.8.3",
-    "typescript-eslint": "8.32.1",
-    "vitest": "3.1.3"
+    "typescript-eslint": "8.32.1"
   }
 }

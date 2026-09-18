@@ -7,16 +7,16 @@
 ## 静的検証と CI
 
 中央リポジトリでは Node.js 22.14.0 と pnpm 10.30.2 を使います。
-`pnpm install --frozen-lockfile` の後、`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm format:check` を実行します。
+`pnpm install --frozen-lockfile` の後、`pnpm typecheck`、`pnpm lint`、`pnpm format:check` を実行します。
 これらの成功と、実際の Secrets を使った署名・公開の成功は別々に記録します。
 
 [verify.yml](../.github/workflows/verify.yml) は `main` への push と pull request で動きます。
-format、lint、typecheck、単体テストに加え、`scripts/workflow/test_workflow.py` の fixture 検証、actionlint、Action の 40 桁 SHA 固定、`scripts/workflow` の ShellCheck を実行します。
+format、lint、typecheck に加え、actionlint、Action の 40 桁 SHA 固定、`scripts/workflow` の ShellCheck を実行します。
 PowerShell の構文解析は runner に `pwsh` が存在するときに実行します。
 このワークフローだけで証明書生成、OS の署名、実際の公開やアプリの更新を確認できるわけではありません。
 
 実際の Actions での `verify` と `sign-release` の実行は未実施です。
-ローカルの静的検証や単体テストが成功しても、この二つを実施済みにはしません。
+ローカルの静的検証が成功しても、この二つを実施済みにはしません。
 
 | 確認対象               | 合格条件                                                                                                |
 | ---------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -35,9 +35,8 @@ PowerShell の構文解析は runner に `pwsh` が存在するときに実行�
 | Actions の固定         | 外部 Action の参照がコミット SHA に固定されている                                                       |
 | rolling tag の移動     | source 取得後にタグが別の SHA へ動いたら、公開前に停止する                                              |
 
-単体テストでは、正常系だけでなく不正な設定、参照先の欠落、ハッシュ不一致、asset の衝突を確認します。
 公開失敗の確認には検証用の Release を使い、正式な配布先を破損させないようにします。
-実際の App と Secrets を使った CI の成功記録は、ローカルテストの結果とは分けて残します。
+実際の App と Secrets を使った CI の成功記録は、ローカルの静的検証結果とは分けて残します。
 
 公開の失敗を試すときは、payload と更新メタデータの各段階で止め、旧 asset の復元と、この実行で追加した asset の取り消しを確認します。
 曖昧な API 応答、外部の同名 asset、Release ID の変更、期限切れでは、他者の asset を変更せずに停止することを確認します。

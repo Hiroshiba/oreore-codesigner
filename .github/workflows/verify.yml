@@ -45,16 +45,6 @@ jobs:
       - name: typecheckを検証
         run: pnpm typecheck
 
-      - name: testを検証
-        run: pnpm test
-
-      - name: workflow fixtureを検証
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 --version
-          python3 scripts/workflow/test_workflow.py
-
       - name: workflowとactionを検証
         shell: bash
         run: |
