@@ -59,7 +59,24 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          actionlint
+          actionlint_version=1.7.12
+          actionlint_sha256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          actionlint_root="$RUNNER_TEMP/actionlint-$actionlint_version"
+          actionlint_archive="$actionlint_root/actionlint.tar.gz"
+          actionlint_binary="$actionlint_root/actionlint"
+          actionlint_url="https://github.com/rhysd/actionlint/releases/download/v$actionlint_version/actionlint_${actionlint_version}_linux_amd64.tar.gz"
+          mkdir -p "$actionlint_root"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 --output "$actionlint_archive" "$actionlint_url"
+          printf '%s  %s\n' "$actionlint_sha256" "$actionlint_archive" | sha256sum --check --status -
+          tar --extract --gzip --file="$actionlint_archive" --directory="$actionlint_root"
+          chmod 0755 "$actionlint_binary"
+          [[ "$("$actionlint_binary" -version | sed -n '1p')" == "$actionlint_version" ]]
+          mapfile -d '' workflow_files < <(rg --files -g '*.yml' -g '*.yaml' .github/workflows -0)
+          if (( ${#workflow_files[@]} == 0 )); then
+            printf 'workflowファイルがありません\n' >&2
+            exit 1
+          fi
+          "$actionlint_binary" -color=false "${workflow_files[@]}"
           while IFS= read -r line; do
             if [[ ! "$line" =~ uses:[[:space:]][^@[:space:]]+@[0-9A-Fa-f]{40}([[:space:]]|$) ]]; then
               printf '40桁SHAで固定されていないactionがあります: %s\n' "$line" >&2
