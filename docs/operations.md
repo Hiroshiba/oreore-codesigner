@@ -8,7 +8,7 @@
 1. GitHub App の Selected repositories に対象リポジトリを含めます。
 2. 公開するソースへタグを付け、そのタグの GitHub Release を作成します。既存 Release を使う場合は、同名ファイルが置換されることを確認します。
 3. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository` と `tag` を指定します。
-4. `macos-signing`、`windows-signing`、`release-publish` の承認時に、対象リポジトリ、タグ、固定されたコミット SHA を確認します。
+4. `macos-signing`、`windows-signing` の承認時に、対象リポジトリ、タグ、固定されたコミット SHA を確認します。
 5. 完了後、Release のファイルと[実機検証](verification.md)の結果を確認します。
 
 GitHub CLI では、中央リポジトリの作業ディレクトリから次のように実行します。
@@ -38,7 +38,6 @@ Immutable Release は変更できません。
 GitHub Release の同名ファイル置換は、削除とアップロードに分かれます。
 公開全体は原子的ではなく、途中で失敗するとファイルが欠けたり、旧版と新版が混在したりします。
 更新メタデータを最後にしても、置換途中に旧メタデータが新しいファイルを参照する状態は防げません。
-旧状態への自動復元は行いません。
 
 公開ジョブで失敗した場合は、次の順に修復します。
 
@@ -64,9 +63,9 @@ artifact が削除済みまたは保持期限切れの場合、同じ成果物�
 ## 成果物と記録
 
 Actions artifact には、固定したソース archive、OS ごとの署名前のアプリ本体と梱包設定、OS ごとの署名済み成果物を保存します。
-公開するファイルは署名済み artifact の `payload/` と `metadata/` にあり、署名確認用の資料は Release へ公開しません。
+公開するファイルは署名済み artifact の `payload/` と `metadata/` にあります。
 artifact の保持期間は 7 日です。
-失敗した公開の再実行に使う署名済み成果物は、必要な間に取得・保管してください。
+同じ署名済み成果物で公開を再実行する場合は、artifact の保持期間内に行ってください。
 
 検証記録には repository、tag、取得時のソース SHA、アプリバージョン、Actions の実行 URL、取得したファイル名を残します。
 秘密鍵、パスワード、GitHub App トークンをログや記録へ含めないでください。

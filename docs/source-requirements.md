@@ -24,7 +24,6 @@ macOS は `.app` 一つ、Windows は `win-unpacked` 一つを署名前の成果
 ビルドには署名鍵、GitHub App の秘密鍵、取得・公開用トークンを使えません。
 
 ソースは Git metadata を含まない archive で渡されます。
-`.git` の参照、submodule、Git LFS に依存するビルドは利用できません。
 `SOURCE_DATE_EPOCH` には取得したコミットの日時を渡します。
 
 ## 署名と梱包へ引き継ぐ設定

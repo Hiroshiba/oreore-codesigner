@@ -8,8 +8,8 @@
 1. GitHub App を作成し、Repository permissions の Contents を Read and write にします。Metadata の必須権限を除き、追加の権限は不要です。
 2. App のインストール先を Selected repositories にし、対象アプリのリポジトリを選びます。この選択範囲が署名・公開を許可する対象です。
 3. App ID と秘密鍵を、以下の表に従って中央へ登録します。
-4. 中央の既定ブランチを保護し、ワークフロー、`config/`、署名と公開の実装の変更にレビューを要求します。CODEOWNERS で所有者を指定します。
-5. `macos-signing`、`windows-signing`、`release-publish` の environment を作成し、承認者とデプロイ元の既定ブランチを設定します。
+4. 中央の既定ブランチを保護し、ワークフロー、`config/`、署名と公開の実装の変更にレビューを要求します。
+5. `macos-signing`、`windows-signing` の environment を作成し、承認者とデプロイ元の既定ブランチを設定します。
 
 | 種類と配置先                            | 名前                             | 内容                       |
 | --------------------------------------- | -------------------------------- | -------------------------- |
@@ -20,14 +20,13 @@
 | `windows-signing` の environment secret | `WINDOWS_CERTIFICATE_PFX_BASE64` | PFX を base64 にした値     |
 | `windows-signing` の environment secret | `WINDOWS_CERTIFICATE_PASSWORD`   | PFX のパスワード           |
 
-`release-publish` は公開前の承認に使います。
 取得と公開のジョブは repository の App 設定を使うため、environment へ同名設定を複製する必要はありません。
 ビルドジョブには、取得・公開用トークンや署名鍵を渡しません。
 
 App 自体には Contents write が必要ですが、取得用トークンは Contents read、公開用トークンは Contents write に制限して別々に発行します。
 どちらも実行時に指定したリポジトリ一つだけを対象にし、ジョブ終了時に失効させます。
 ワークフローは既定ブランチ以外からの実行を拒否します。
-署名・公開の承認者は、対象リポジトリ、タグ、取得時に固定したコミットを確認してください。
+署名の承認者は、対象リポジトリ、タグ、取得時に固定したコミットを確認してください。
 
 ## 証明書の準備
 

@@ -42,13 +42,12 @@ Get-FileHash -LiteralPath .\certificate.cer -Algorithm SHA256
 ```
 
 1. 公開証明書の fingerprint、有効期限、発行先を確認します。
-2. `scripts/certificates/install-windows-trust.ps1` を使い、公開証明書を Root と TrustedPublisher へ登録します。`-CertificatePath` に `certificate.cer`、`-Scope` に `CurrentUser` または `LocalMachine`、`-Fingerprint` に確認済みの SHA-1 fingerprint を指定します。
+2. `scripts/certificates/install-windows-trust.ps1` を使い、公開証明書を `CurrentUser` の Root と TrustedPublisher へ登録します。`-CertificatePath` に `certificate.cer`、`-Fingerprint` に確認済みの SHA-1 fingerprint を指定します。
 3. ブラウザーで対象 Release の通常 NSIS または NSIS Web インストーラーをダウンロードします。Mark of the Web を残したまま、デジタル署名の署名者と証明書を確認します。
 4. インストーラーを実行し、初回導入を完了します。NSIS Web を使う場合は、インストーラーが参照するパッケージにもアクセスできることを確認します。
 5. 次のバージョンへの更新が通常 NSIS を使うことを、更新ログとダウンロードしたファイルで確認します。
 
-`CurrentUser` は現在の利用者だけ、`LocalMachine` は端末全体を対象にします。
-`LocalMachine` への登録には管理者権限が必要です。
+登録対象は現在の利用者だけで、管理者権限は不要です。
 スクリプトの `-Fingerprint` は `fingerprint.txt` の `sha1_fingerprint` に対応する、区切りなしの 40 桁の値です。
 中央の `config/signing.json` に登録する SHA-256 の値とは取り違えないでください。
 同じ fingerprint がすでに登録されていれば再登録せず、表示名だけを使った証明書の代替検索は行いません。
