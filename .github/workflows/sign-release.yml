@@ -149,7 +149,7 @@ jobs:
 
       - name: source取得用App tokenを発行
         id: source-app-token
-        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ vars.SIGNING_APP_ID }}
           private-key: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
@@ -575,7 +575,7 @@ jobs:
 
       - name: 公開用App tokenを発行
         id: publish-app-token
-        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ vars.SIGNING_APP_ID }}
           private-key: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
