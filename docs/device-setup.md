@@ -20,7 +20,7 @@ openssl x509 -inform DER -in certificate.cer -noout -fingerprint -sha256
 
 1. 公開証明書の fingerprint、有効期限、発行先を確認します。
 2. キーチェーンアクセスを開き、ファイルメニューから `certificate.cer` を読み込みます。取り込んだ証明書を開き、対象の証明書であることをもう一度確認します。証明書を信頼する操作を求められた場合は、対象の証明書と用途を確認して本人が判断します。
-3. ブラウザーで対象 Release の DMG をダウンロードします。quarantine 属性を残したまま開き、アプリを Applications へ移します。
+3. ブラウザーで対象 Release の ZIP をダウンロードします。quarantine 属性を残したまま展開し、アプリを Applications へ移します。
 4. アプリを起動します。自己署名だけでは Gatekeeper の標準許可にならないため、警告が出る場合があります。
 5. 配布元と署名を確認したうえで利用する場合は、macOS が提供する個別アプリの許可操作を行います。操作場所は macOS のバージョンにより異なり、システム設定の「プライバシーとセキュリティ」で案内されることがあります。
 6. 起動と主要機能を確認し、次のバージョンへ ZIP 更新できることを[検証手順](verification.md)で確認します。
@@ -43,8 +43,8 @@ Get-FileHash -LiteralPath .\certificate.cer -Algorithm SHA256
 
 1. 公開証明書の fingerprint、有効期限、発行先を確認します。
 2. `scripts/certificates/install-windows-trust.ps1` を使い、公開証明書を Root と TrustedPublisher へ登録します。`-CertificatePath` に `certificate.cer`、`-Scope` に `CurrentUser` または `LocalMachine`、`-Fingerprint` に確認済みの SHA-1 fingerprint を指定します。
-3. ブラウザーで対象 Release の WebSetup をダウンロードします。Mark of the Web を残したまま、デジタル署名の署名者と証明書を確認します。
-4. WebSetup を実行し、初回導入を完了します。WebSetup が参照するダウンロード対象にもアクセスできることを確認します。
+3. ブラウザーで対象 Release の通常 NSIS または NSIS Web インストーラーをダウンロードします。Mark of the Web を残したまま、デジタル署名の署名者と証明書を確認します。
+4. インストーラーを実行し、初回導入を完了します。NSIS Web を使う場合は、インストーラーが参照するパッケージにもアクセスできることを確認します。
 5. 次のバージョンへの更新が通常 NSIS を使うことを、更新ログとダウンロードしたファイルで確認します。
 
 `CurrentUser` は現在の利用者だけ、`LocalMachine` は端末全体を対象にします。
