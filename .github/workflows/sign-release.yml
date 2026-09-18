@@ -92,7 +92,7 @@ jobs:
       - name: source archiveをartifact化
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-source
+          name: release-${{ github.run_id }}-source
           if-no-files-found: error
           retention-days: 7
           path: ${{ runner.temp }}/source.tar
@@ -123,7 +123,7 @@ jobs:
       - name: source archiveを取得
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-source
+          name: release-${{ github.run_id }}-source
           path: ${{ runner.temp }}/source
 
       - name: 秘密なしsource build
@@ -146,7 +146,7 @@ jobs:
       - name: macOS build artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-macos-build
+          name: release-${{ github.run_id }}-macos-build
           if-no-files-found: error
           retention-days: 7
           path: ${{ runner.temp }}/macos-build
@@ -177,7 +177,7 @@ jobs:
       - name: source archiveを取得
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-source
+          name: release-${{ github.run_id }}-source
           path: ${{ runner.temp }}/source
 
       - name: 秘密なしsource build
@@ -201,7 +201,7 @@ jobs:
       - name: Windows build artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-windows-build
+          name: release-${{ github.run_id }}-windows-build
           if-no-files-found: error
           retention-days: 7
           path: ${{ runner.temp }}/windows-build
@@ -233,7 +233,7 @@ jobs:
       - name: macOS build artifactを取得
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-macos-build
+          name: release-${{ github.run_id }}-macos-build
           path: ${{ runner.temp }}/macos-build
 
       - name: package inputのversionを取得
@@ -269,7 +269,7 @@ jobs:
       - name: macOS signed artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-macos-sign
+          name: release-${{ github.run_id }}-macos-sign
           if-no-files-found: error
           retention-days: 7
           path: ${{ runner.temp }}/macos-release
@@ -301,7 +301,7 @@ jobs:
       - name: Windows build artifactを取得
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-windows-build
+          name: release-${{ github.run_id }}-windows-build
           path: ${{ runner.temp }}/windows-build
 
       - name: package inputのversionを取得
@@ -334,7 +334,7 @@ jobs:
       - name: Windows signed artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-windows-sign
+          name: release-${{ github.run_id }}-windows-sign
           if-no-files-found: error
           retention-days: 7
           path: ${{ runner.temp }}/windows-release
@@ -376,13 +376,13 @@ jobs:
       - name: macOS signed artifactを取得
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-macos-sign
+          name: release-${{ github.run_id }}-macos-sign
           path: ${{ runner.temp }}/macos-release
 
       - name: Windows signed artifactを取得
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: release-${{ github.run_id }}-${{ github.run_attempt }}-windows-sign
+          name: release-${{ github.run_id }}-windows-sign
           path: ${{ runner.temp }}/windows-release
 
       - name: 公開用App tokenを発行
