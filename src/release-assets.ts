@@ -90,11 +90,11 @@ function assertMetadataFile(
     throw new Error(`metadata pathがassets directoryにありません: ${metadata.path}`);
   }
   const metadataPathSize = assetSizes.get(metadataPathKey);
-  if (metadataPathSize === undefined) {
+  if (metadataPathSize == undefined) {
     throw new Error(`metadata pathのasset sizeを確認できません: ${metadata.path}`);
   }
   const actualPathName = actualNames.get(metadataPathKey);
-  if (actualPathName === undefined) {
+  if (actualPathName == undefined) {
     throw new Error(`metadata pathの実file名を確認できません: ${metadata.path}`);
   }
   if (metadata.path !== actualPathName) {
@@ -118,7 +118,7 @@ function assertMetadataFile(
       throw new Error(`metadata filesのurlがassets directoryにありません: ${file.url}`);
     }
     const actualFileName = actualNames.get(key);
-    if (actualFileName === undefined) {
+    if (actualFileName == undefined) {
       throw new Error(`metadata filesの実file名を確認できません: ${file.url}`);
     }
     if (file.url !== actualFileName) {
@@ -131,22 +131,25 @@ function assertMetadataFile(
     if (!equalSha512(sha512(contents), file.sha512)) {
       throw new Error(`metadata filesのsha512が実assetと一致しません: ${file.url}`);
     }
-    if (file.blockMapSize !== undefined) {
+    if (metadataKind === ".exe" && file.url === metadata.path && file.blockMapSize == undefined) {
+      throw new Error(`Windows metadataの通常NSIS blockmapがありません: ${file.url}`);
+    }
+    if (file.blockMapSize != undefined) {
       const blockMapName = `${file.url}.blockmap`;
       const actualBlockMapName = actualNames.get(blockMapName.toLowerCase());
-      if (actualBlockMapName === undefined) {
+      if (actualBlockMapName == undefined) {
         throw new Error(`metadata blockmapがassets directoryにありません: ${blockMapName}`);
       }
       if (actualBlockMapName !== blockMapName) {
         throw new Error(`metadata blockmapのbasenameが実fileと一致しません: ${blockMapName}`);
       }
       const blockMapSize = assetSizes.get(blockMapName.toLowerCase());
-      if (blockMapSize === undefined || blockMapSize !== file.blockMapSize) {
+      if (blockMapSize == undefined || blockMapSize !== file.blockMapSize) {
         throw new Error(`metadata blockMapSizeが実fileと一致しません: ${file.url}`);
       }
     }
     const fileExtension = extname(file.url).toLowerCase();
-    if (metadataKind === ".zip" && fileExtension !== ".zip" && fileExtension !== ".dmg") {
+    if (metadataKind === ".zip" && fileExtension !== ".zip") {
       throw new Error(`mac metadataがZIP以外を参照しています: ${file.url}`);
     }
     if (metadataKind === ".exe" && fileExtension !== ".exe") {
@@ -183,7 +186,7 @@ export function validateReleaseAssets(assetsDirectory: string, expectedVersion: 
     if (
       [...entry.name].some((character) => {
         const code = character.codePointAt(0);
-        return code === undefined || code <= 0x1f || code === 0x7f;
+        return code == undefined || code <= 0x1f || code === 0x7f;
       })
     ) {
       throw new Error(`asset basenameに制御文字を指定できません: ${entry.name}`);

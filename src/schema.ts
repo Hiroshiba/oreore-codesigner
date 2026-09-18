@@ -10,10 +10,38 @@ const repositoryPattern =
   /^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const sha512Pattern = /^(?:[0-9A-Fa-f]{128}|[A-Za-z0-9+/]{86}==)$/;
-const artifactNamePattern =
-  /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\$\{(?:version|name|productName|arch|ext)\}[A-Za-z0-9._-]*)*$/;
 const packageManagerPattern =
   /^pnpm@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\+[A-Za-z0-9._-]+)?$/;
+const artifactTokens = new Set(["version", "name", "productName", "arch", "ext"]);
+
+function isValidArtifactName(value: string): boolean {
+  if (value.length === 0) {
+    return false;
+  }
+  let index = 0;
+  let hasPart = false;
+  while (index < value.length) {
+    if (value.startsWith("${", index)) {
+      const tokenEnd = value.indexOf("}", index + 2);
+      if (tokenEnd < 0 || !artifactTokens.has(value.slice(index + 2, tokenEnd))) {
+        return false;
+      }
+      hasPart = true;
+      index = tokenEnd + 1;
+      continue;
+    }
+    const character = value[index];
+    if (character == undefined || !/[A-Za-z0-9._-]/u.test(character)) {
+      return false;
+    }
+    if (index === 0 && !/[A-Za-z0-9]/u.test(character)) {
+      return false;
+    }
+    hasPart = true;
+    index += 1;
+  }
+  return hasPart;
+}
 
 function isValidGitRef(value: string): boolean {
   if (
@@ -37,7 +65,7 @@ function isValidGitRef(value: string): boolean {
   }
   for (const character of value) {
     const code = character.codePointAt(0);
-    if (code === undefined) {
+    if (code == undefined) {
       throw new Error("tagの文字を解析できません");
     }
     if (code <= 0x20 || code === 0x7f) {
@@ -75,7 +103,7 @@ const productNameSchema = nonEmptyStringSchema
       [...value].every((character) => {
         const code = character.codePointAt(0);
         return (
-          code !== undefined && code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f)
+          code != undefined && code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f)
         );
       }),
     "productNameに制御文字またはpath separatorを指定できません"
@@ -113,15 +141,19 @@ const fileNameSchema = z
       [...value].every((character) => {
         const code = character.codePointAt(0);
         return (
-          code !== undefined && code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f)
+          code != undefined && code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f)
         );
       }),
     "basenameを指定してください"
   );
 const artifactNameSchema = z
   .string()
-  .regex(artifactNamePattern, "artifactNameが不正です")
+  .refine(isValidArtifactName, "artifactNameが不正です")
   .refine((value) => !value.endsWith("."), "artifactNameの末尾にdotを指定できません");
+const executableNameSchema = fileNameSchema.refine(
+  (value) => !value.toLowerCase().endsWith(".exe"),
+  "executableNameは拡張子なしで指定してください"
+);
 
 const signingFingerprintSchema = z
   .string()
@@ -203,7 +235,7 @@ const macosInputSchema = z
 const windowsInputSchema = z
   .object({
     architecture: z.literal("x64"),
-    executableName: fileNameSchema.optional(),
+    executableName: executableNameSchema.optional(),
     publisherName: productNameSchema.optional(),
     artifactName: artifactNameSchema.optional(),
     guid: uuidSchema.optional(),
@@ -307,6 +339,11 @@ export function parseRelativePath(value: string): string {
 /** artifactName patternを検証します。 */
 export function parseArtifactName(value: string): string {
   return artifactNameSchema.parse(value);
+}
+
+/** Windows executableNameを検証します。 */
+export function parseExecutableName(value: string): string {
+  return executableNameSchema.parse(value);
 }
 
 /** appId文字列を検証します。 */

@@ -81,7 +81,7 @@ function parseOptions(args: string[]): {
       throw new Error(`optionが重複または不正です: --${key}`);
     }
     const optionValue = value[0];
-    if (optionValue === undefined) {
+    if (optionValue == undefined) {
       throw new Error(`optionの値がありません: --${key}`);
     }
     options[key] = optionValue;
@@ -129,6 +129,6 @@ export function runCli(args: string[]): void {
   executeValidateReleaseAssets(options);
 }
 
-if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (process.argv[1] != undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   runCli(process.argv.slice(2));
 }

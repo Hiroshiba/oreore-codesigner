@@ -8,6 +8,7 @@ import {
   type PackageInput,
   parseAppId,
   parseArtifactName,
+  parseExecutableName,
   parsePackageInput,
   parsePackageManager,
   parseSemVer,
@@ -179,7 +180,7 @@ function findBuilderPath(sourceRoot: string): string {
     );
   }
   const path = existing[0];
-  if (path === undefined) {
+  if (path == undefined) {
     throw new Error("electron-builder設定がありません");
   }
   assertRegularFile(path, "electron-builder設定がregular fileではありません");
@@ -202,7 +203,7 @@ function parseSourcePackage(path: string): { name: string; version: string } {
 
 function parseSourceBuilder(path: string): SourceBuilder {
   const value = sourceBuilderSchema.parse(readYaml(path));
-  if (value.appId === undefined || value.productName === undefined) {
+  if (value.appId == undefined || value.productName == undefined) {
     throw new Error("electron-builder設定のappIdとproductNameが必要です");
   }
   parseAppId(value.appId);
@@ -211,7 +212,7 @@ function parseSourceBuilder(path: string): SourceBuilder {
 }
 
 function targetArchitectures(value: z.infer<typeof targetListSchema> | undefined): string[] {
-  if (value === undefined) {
+  if (value == undefined) {
     return [];
   }
   const targets = Array.isArray(value) ? value : [value];
@@ -220,7 +221,7 @@ function targetArchitectures(value: z.infer<typeof targetListSchema> | undefined
     if (typeof target === "string") {
       continue;
     }
-    if (target.arch === undefined) {
+    if (target.arch == undefined) {
       continue;
     }
     const targetArchitectures = Array.isArray(target.arch) ? target.arch : [target.arch];
@@ -302,7 +303,7 @@ function readInfoPlist(path: string): Map<string, string> {
   for (const match of source.matchAll(pattern)) {
     const key = match[1];
     const value = match[2];
-    if (key === undefined || value === undefined) {
+    if (key == undefined || value == undefined) {
       throw new Error("Info.plistのentryを解析できません");
     }
     if (values.has(key)) {
@@ -325,27 +326,27 @@ function validateMacPrepackaged(
     throw new Error("prepackaged directoryの.appを一意に決定できません");
   }
   const app = apps[0];
-  if (app === undefined || !app.isDirectory() || app.isSymbolicLink()) {
+  if (app == undefined || !app.isDirectory() || app.isSymbolicLink()) {
     throw new Error("prepackagedの.appがdirectoryではありません");
   }
   const infoPath = join(prepackagedRoot, app.name, "Contents", "Info.plist");
   const values = readInfoPlist(infoPath);
   assertPlistValue(values, "CFBundleIdentifier", appId);
   const bundleNames = [values.get("CFBundleName"), values.get("CFBundleDisplayName")].filter(
-    (value): value is string => value !== undefined
+    (value): value is string => value != undefined
   );
   if (bundleNames.length === 0 || bundleNames.some((value) => value !== productName)) {
     throw new Error("Info.plistのproductNameがpackage inputと一致しません");
   }
   const shortVersion = values.get("CFBundleShortVersionString");
   const bundleVersion = values.get("CFBundleVersion");
-  if (shortVersion !== undefined && shortVersion !== version) {
+  if (shortVersion != undefined && shortVersion !== version) {
     throw new Error("Info.plistのCFBundleShortVersionStringがpackage inputと一致しません");
   }
-  if (bundleVersion !== undefined && bundleVersion !== version) {
+  if (bundleVersion != undefined && bundleVersion !== version) {
     throw new Error("Info.plistのCFBundleVersionがpackage inputと一致しません");
   }
-  if (shortVersion === undefined && bundleVersion === undefined) {
+  if (shortVersion == undefined && bundleVersion == undefined) {
     throw new Error("Info.plistにversionがありません");
   }
 }
@@ -402,13 +403,13 @@ function validateWindowsPrepackaged(
     isPeFile(readRegularFile(join(prepackagedRoot, entry.name), "exeを読み込めません"))
   );
   const matchingEntries =
-    executableName === undefined
+    executableName == undefined
       ? peEntries
-      : executableEntries.filter(
-          (entry) => entry.name.toLowerCase() === executableName.toLowerCase()
+      : peEntries.filter(
+          (entry) => entry.name.toLowerCase() === `${executableName}.exe`.toLowerCase()
         );
   const mainEntry = matchingEntries.length === 1 ? matchingEntries[0] : undefined;
-  if (mainEntry === undefined) {
+  if (mainEntry == undefined) {
     throw new Error("prepackagedの主exeを一意に決定できません");
   }
   const contents = readRegularFile(join(prepackagedRoot, mainEntry.name), "主exeを読み込めません");
@@ -417,22 +418,24 @@ function validateWindowsPrepackaged(
   }
   const strings = readUtf16Strings(contents);
   const versionInfoProductName = versionInfoValue(strings, "ProductName");
-  if (versionInfoProductName !== undefined && versionInfoProductName !== productName) {
+  if (versionInfoProductName == undefined) {
+    throw new Error("主exeのVersionInfo ProductNameがありません");
+  }
+  if (versionInfoProductName !== productName) {
     throw new Error("主exeのVersionInfo ProductNameがpackage inputと一致しません");
   }
-  if (executableName !== undefined) {
-    const originalFilename = versionInfoValue(strings, "OriginalFilename");
-    if (
-      originalFilename !== undefined &&
-      originalFilename.toLowerCase() !== executableName.toLowerCase()
-    ) {
-      throw new Error("主exeのVersionInfo OriginalFilenameがsource executableNameと一致しません");
-    }
+  const originalFilename = versionInfoValue(strings, "OriginalFilename");
+  if (originalFilename == undefined) {
+    throw new Error("主exeのVersionInfo OriginalFilenameがありません");
+  }
+  const expectedFilename = executableName == undefined ? mainEntry.name : `${executableName}.exe`;
+  if (originalFilename.toLowerCase() !== expectedFilename.toLowerCase()) {
+    throw new Error("主exeのVersionInfo OriginalFilenameがsource executableNameと一致しません");
   }
 }
 
 function nsisOptions(value: SourceNsis | undefined): Record<string, unknown> | undefined {
-  if (value === undefined) {
+  if (value == undefined) {
     return undefined;
   }
   const parsed: Record<string, unknown> = {};
@@ -453,7 +456,7 @@ function nsisOptions(value: SourceNsis | undefined): Record<string, unknown> | u
     "guid"
   ]);
   for (const [key, item] of Object.entries(value)) {
-    if (allowedKeys.has(key) && item !== undefined) {
+    if (allowedKeys.has(key) && item != undefined) {
       parsed[key] = item;
     }
   }
@@ -461,7 +464,7 @@ function nsisOptions(value: SourceNsis | undefined): Record<string, unknown> | u
 }
 
 function parseOptionalArtifactName(value: string | undefined): string | undefined {
-  if (value === undefined) {
+  if (value == undefined) {
     return undefined;
   }
   return parseArtifactName(value);
@@ -481,12 +484,12 @@ function buildMacInput(
   validateMacPrepackaged(prepackagedRoot, appId, productName, sourcePackage.version);
   const entitlements = mac?.entitlements;
   const entitlementsInherit = mac?.entitlementsInherit;
-  if (entitlements !== undefined) {
+  if (entitlements != undefined) {
     const sourcePath = resolve(sourceRoot, parseRelativePath(entitlements));
     assertRealPathWithin(sourceRoot, sourcePath, "entitlementsがsource root外を参照しています");
     copyInputFile(sourceRoot, entitlements, join(outputRoot, "entitlements.plist"));
   }
-  if (entitlementsInherit !== undefined) {
+  if (entitlementsInherit != undefined) {
     const sourcePath = resolve(sourceRoot, parseRelativePath(entitlementsInherit));
     assertRealPathWithin(
       sourceRoot,
@@ -498,13 +501,13 @@ function buildMacInput(
   const artifactName = parseOptionalArtifactName(mac?.artifactName ?? builder.artifactName);
   const macInput = {
     architecture,
-    ...(artifactName === undefined ? {} : { artifactName }),
-    ...(entitlements === undefined ? {} : { entitlements: "entitlements.plist" }),
-    ...(entitlementsInherit === undefined
+    ...(artifactName == undefined ? {} : { artifactName }),
+    ...(entitlements == undefined ? {} : { entitlements: "entitlements.plist" }),
+    ...(entitlementsInherit == undefined
       ? {}
       : { entitlementsInherit: "entitlements-inherit.plist" }),
-    ...(mac?.hardenedRuntime === undefined ? {} : { hardenedRuntime: mac.hardenedRuntime }),
-    ...(mac?.gatekeeperAssess === undefined ? {} : { gatekeeperAssess: mac.gatekeeperAssess })
+    ...(mac?.hardenedRuntime == undefined ? {} : { hardenedRuntime: mac.hardenedRuntime }),
+    ...(mac?.gatekeeperAssess == undefined ? {} : { gatekeeperAssess: mac.gatekeeperAssess })
   };
   return parsePackageInput({
     platform: "macos",
@@ -528,14 +531,15 @@ function buildWindowsInput(
   if (architecture !== "x64") {
     throw new Error("Windows architectureはx64でなければなりません");
   }
-  const executableName = win?.executableName;
+  const executableName =
+    win?.executableName == undefined ? undefined : parseExecutableName(win.executableName);
   validateWindowsPrepackaged(prepackagedRoot, executableName, productName);
   const nsis = nsisOptions(builder.nsis);
   const nsisWeb = nsisOptions(builder.nsisWeb);
   const sourceGuid = builder.nsis?.guid ?? builder.nsisWeb?.guid;
   if (
-    builder.nsis?.guid !== undefined &&
-    builder.nsisWeb?.guid !== undefined &&
+    builder.nsis?.guid != undefined &&
+    builder.nsisWeb?.guid != undefined &&
     builder.nsis.guid !== builder.nsisWeb.guid
   ) {
     throw new Error("NSISとNSIS WebのGUIDが一致しません");
@@ -543,22 +547,22 @@ function buildWindowsInput(
   const artifactName = parseOptionalArtifactName(win?.artifactName ?? builder.artifactName);
   const sourcePublisherName = win?.publisherName;
   const configuredPublisherName = globalPublisherName();
-  if (sourcePublisherName !== undefined && configuredPublisherName === undefined) {
+  if (sourcePublisherName != undefined && configuredPublisherName == undefined) {
     throw new Error("source publisherNameを照合するglobal signing displayNameがありません");
   }
   if (
-    sourcePublisherName !== undefined &&
-    configuredPublisherName !== undefined &&
+    sourcePublisherName != undefined &&
+    configuredPublisherName != undefined &&
     sourcePublisherName !== configuredPublisherName
   ) {
     throw new Error("source publisherNameとglobal signing displayNameが一致しません");
   }
   const windowsInput = {
     architecture,
-    ...(executableName === undefined ? {} : { executableName }),
-    ...(configuredPublisherName === undefined ? {} : { publisherName: configuredPublisherName }),
-    ...(artifactName === undefined ? {} : { artifactName }),
-    ...(sourceGuid === undefined
+    ...(executableName == undefined ? {} : { executableName }),
+    ...(configuredPublisherName == undefined ? {} : { publisherName: configuredPublisherName }),
+    ...(artifactName == undefined ? {} : { artifactName }),
+    ...(sourceGuid == undefined
       ? {}
       : {
           guid: z
@@ -566,8 +570,8 @@ function buildWindowsInput(
             .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
             .parse(sourceGuid)
         }),
-    ...(nsis === undefined ? {} : { nsis }),
-    ...(nsisWeb === undefined ? {} : { nsisWeb })
+    ...(nsis == undefined ? {} : { nsis }),
+    ...(nsisWeb == undefined ? {} : { nsisWeb })
   };
   return parsePackageInput({
     platform: "windows",
@@ -611,7 +615,7 @@ export function createPackageInput(
         ? buildMacInput(sourceRoot, sourcePackage, builder, prepackagedRoot, outputRoot)
         : buildWindowsInput(sourcePackage, builder, prepackagedRoot);
     const json = JSON.stringify(packageInput, null, 2);
-    if (json === undefined) {
+    if (json == undefined) {
       throw new Error("package inputを生成できません");
     }
     try {

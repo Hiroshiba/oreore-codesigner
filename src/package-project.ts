@@ -105,7 +105,7 @@ function packageJson(input: PackageInput): string {
     private: true
   };
   const contents = JSON.stringify(value, null, 2);
-  if (contents === undefined) {
+  if (contents == undefined) {
     throw new Error("package projectのpackage.jsonを生成できません");
   }
   return `${contents}\n`;
@@ -113,6 +113,18 @@ function packageJson(input: PackageInput): string {
 
 function githubUrl(repository: string, tag: string): string {
   return `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}`;
+}
+
+function genericPublish(
+  repository: string,
+  tag: string,
+  publishAutoUpdate: boolean
+): Record<string, unknown> {
+  return {
+    provider: "generic",
+    url: githubUrl(repository, tag),
+    publishAutoUpdate
+  };
 }
 
 function copyInputFile(inputRoot: string, relativePath: string, outputPath: string): void {
@@ -148,26 +160,26 @@ function macBuilder(input: Extract<PackageInput, { platform: "macos" }>): Record
   const config: Record<string, unknown> = {
     target: [{ target: "zip", arch: [mac.architecture] }]
   };
-  if (mac.artifactName !== undefined) {
+  if (mac.artifactName != undefined) {
     config.artifactName = mac.artifactName;
   }
-  if (mac.entitlements !== undefined) {
+  if (mac.entitlements != undefined) {
     config.entitlements = mac.entitlements;
   }
-  if (mac.entitlementsInherit !== undefined) {
+  if (mac.entitlementsInherit != undefined) {
     config.entitlementsInherit = mac.entitlementsInherit;
   }
-  if (mac.hardenedRuntime !== undefined) {
+  if (mac.hardenedRuntime != undefined) {
     config.hardenedRuntime = mac.hardenedRuntime;
   }
-  if (mac.gatekeeperAssess !== undefined) {
+  if (mac.gatekeeperAssess != undefined) {
     config.gatekeeperAssess = mac.gatekeeperAssess;
   }
   return config;
 }
 
 function nsisConfig(options: Record<string, unknown> | undefined): Record<string, unknown> {
-  if (options === undefined) {
+  if (options == undefined) {
     return {};
   }
   const result: Record<string, unknown> = {};
@@ -194,26 +206,26 @@ function windowsBuilder(
       }
     ]
   };
-  if (windows.executableName !== undefined) {
+  if (windows.executableName != undefined) {
     win.executableName = windows.executableName;
   }
   const publisherName = globalPublisherName();
-  if (publisherName !== undefined) {
-    if (windows.publisherName !== undefined && windows.publisherName !== publisherName) {
+  if (publisherName != undefined) {
+    if (windows.publisherName != undefined && windows.publisherName !== publisherName) {
       throw new Error("package inputのpublisherNameとglobal signing displayNameが一致しません");
     }
     win.publisherName = publisherName;
-  } else if (windows.publisherName !== undefined) {
+  } else if (windows.publisherName != undefined) {
     throw new Error("package projectのpublisherNameにglobal signing displayNameがありません");
   }
   const sourceOptions = target === "windows-nsis" ? windows.nsis : windows.nsisWeb;
   const selectedOptions = nsisConfig(sourceOptions);
   const guid = windows.guid ?? sourceOptions?.guid;
-  if (guid !== undefined) {
+  if (guid != undefined) {
     selectedOptions.guid = guid;
   }
   const artifactName = sourceOptions?.artifactName ?? windows.artifactName;
-  if (artifactName !== undefined) {
+  if (artifactName != undefined) {
     selectedOptions.artifactName = artifactName;
   }
   const result: Record<string, unknown> = { ...commonBuilder(input), win };
@@ -222,10 +234,10 @@ function windowsBuilder(
   } else {
     result.nsisWeb = {
       ...selectedOptions,
-      appPackageUrl: githubUrl(repository, tag),
-      publishAutoUpdate: false
+      appPackageUrl: githubUrl(repository, tag)
     };
   }
+  result.publish = genericPublish(repository, tag, target === "windows-nsis");
   return result;
 }
 
@@ -256,7 +268,11 @@ function buildProject(
     if (input.platform !== "macos") {
       throw new Error("macos targetにはmacos package inputが必要です");
     }
-    config = { ...commonBuilder(input), mac: macBuilder(input) };
+    config = {
+      ...commonBuilder(input),
+      publish: genericPublish(repository, tag, true),
+      mac: macBuilder(input)
+    };
   } else {
     if (input.platform !== "windows") {
       throw new Error("Windows targetにはwindows package inputが必要です");
@@ -267,11 +283,11 @@ function buildProject(
   writeExclusive(join(outputRoot, "electron-builder.yml"), builderContents);
   const expected = ["package.json", "electron-builder.yml"];
   if (target === "macos" && input.platform === "macos") {
-    if (input.macos.entitlements !== undefined) {
+    if (input.macos.entitlements != undefined) {
       copyInputFile(inputRoot, input.macos.entitlements, join(outputRoot, MAC_ENTITLEMENTS_FILE));
       expected.push(MAC_ENTITLEMENTS_FILE);
     }
-    if (input.macos.entitlementsInherit !== undefined) {
+    if (input.macos.entitlementsInherit != undefined) {
       copyInputFile(
         inputRoot,
         input.macos.entitlementsInherit,
