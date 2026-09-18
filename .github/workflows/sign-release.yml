@@ -142,7 +142,7 @@ jobs:
         run: bash scripts/workflow/setup-central.sh "$CENTRAL_PNPM_VERSION"
 
       - name: prepared contractを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-prepare
           path: ${{ runner.temp }}/prepare
@@ -205,7 +205,7 @@ jobs:
           node-version: 22.14.0
 
       - name: source archiveを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
           path: ${{ runner.temp }}/source-artifact
@@ -275,7 +275,7 @@ jobs:
           node-version: 22.14.0
 
       - name: source archiveを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
           path: ${{ runner.temp }}/source-artifact
@@ -347,13 +347,13 @@ jobs:
           node-version: 22.14.0
 
       - name: macOS build artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-macos-build
           path: ${{ runner.temp }}/macos-build
 
       - name: acquire artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
           path: ${{ runner.temp }}/acquire-source
@@ -413,13 +413,13 @@ jobs:
           node-version: 22.14.0
 
       - name: Windows build artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-windows-build
           path: ${{ runner.temp }}/windows-build
 
       - name: acquire artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
           path: ${{ runner.temp }}/acquire-source
@@ -471,19 +471,19 @@ jobs:
           node-version: 22.14.0
 
       - name: macOS signed artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-macos-signed
           path: ${{ runner.temp }}/macos-signed
 
       - name: Windows signed artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-windows-signed
           path: ${{ runner.temp }}/windows-signed
 
       - name: acquire artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
           path: ${{ runner.temp }}/acquire-source
@@ -559,13 +559,13 @@ jobs:
           node-version: 22.14.0
 
       - name: release setを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-release
           path: ${{ runner.temp }}/release-set
 
       - name: acquire artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: central-${{ github.run_id }}-${{ needs.prepare.outputs.app_id }}-source
           path: ${{ runner.temp }}/acquire-source
