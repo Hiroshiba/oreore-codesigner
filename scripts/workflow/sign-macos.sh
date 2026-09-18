@@ -42,7 +42,7 @@ if [[ ! -d "$central_root" || -L "$central_root" ]]; then
   printf '%s\n' '中央repoのpathが不正です' >&2
   exit 1
 fi
-if [[ ! "$repository" =~ ^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$ ]]; then
+if [[ ! "$repository" =~ ^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?/[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$ ]]; then
   printf '%s\n' 'repositoryはowner/name形式でなければなりません' >&2
   exit 1
 fi
@@ -107,7 +107,7 @@ for optional_path in "$entitlements_path" "$entitlements_inherit_path"; do
   if [[ -z "$optional_path" ]]; then
     continue
   fi
-  if [[ -L "$optional_path" || ( -e "$optional_path" && ! -f "$optional_path" ) ]]; then
+  if [[ ! -f "$optional_path" || -L "$optional_path" ]]; then
     printf 'entitlementsが通常fileではありません: %s\n' "$optional_path" >&2
     exit 1
   fi
@@ -115,8 +115,7 @@ done
 
 release_payload_directory="$release_output_directory/payload"
 release_metadata_directory="$release_output_directory/metadata"
-release_evidence_directory="$release_output_directory/evidence"
-mkdir -p -- "$release_payload_directory" "$release_metadata_directory" "$release_evidence_directory"
+mkdir -p -- "$release_payload_directory" "$release_metadata_directory"
 
 umask 077
 work_directory=$(mktemp -d "${RUNNER_TEMP:-/tmp}/central-sign-macos.XXXXXX")
@@ -329,7 +328,7 @@ await sign({
   preEmbedProvisioningProfile: false,
   strictVerify: true,
   optionsForFile: (filePath) => {
-    const options = { hardenedRuntime: true };
+    const options = { hardenedRuntime: true, timestamp: "none" };
     if (filePath === app && entitlements !== undefined) {
       options.entitlements = entitlements;
     }
@@ -344,15 +343,6 @@ unset CENTRAL_SIGN_APP CENTRAL_SIGN_IDENTITY CENTRAL_SIGN_KEYCHAIN CENTRAL_SIGN_
 
 if ! codesign --verify --deep --strict --verbose=2 "$app_path"; then
   printf '%s\n' '署名検証に失敗しました' >&2
-  exit 1
-fi
-designated_requirement_path="$release_evidence_directory/designated-requirement.txt"
-if ! codesign -d -r- --verbose=4 "$app_path" 2>"$designated_requirement_path"; then
-  printf '%s\n' 'designated requirementを記録できません' >&2
-  exit 1
-fi
-if [[ ! -s "$designated_requirement_path" ]]; then
-  printf '%s\n' 'designated requirementを記録できません' >&2
   exit 1
 fi
 
