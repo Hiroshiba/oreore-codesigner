@@ -63,56 +63,6 @@ else
   mkdir -p -- "$release_output_directory"
 fi
 
-if ! jq -e '
-  type == "object" and
-  .platform == "macos" and
-  (.name | type == "string" and length > 0) and
-  (.appId | type == "string" and length > 0) and
-  (.version | type == "string" and length > 0) and
-  (.productName | type == "string" and length > 0) and
-  (.macos | type == "object") and
-  (.macos.architecture | type == "string" and length > 0)
-' "$package_input_path" >/dev/null; then
-  printf '%s\n' 'package-input.jsonの形式が不正です' >&2
-  exit 1
-fi
-app_id=$(jq -er '.appId' "$package_input_path")
-version=$(jq -er '.version' "$package_input_path")
-product_name=$(jq -er '.productName' "$package_input_path")
-architecture=$(jq -er '.macos.architecture' "$package_input_path")
-if [[ ! "$architecture" =~ ^(x64|arm64)$ ]]; then
-  printf '%s\n' 'package-inputのarchitectureが不正です' >&2
-  exit 1
-fi
-
-entitlements_path=''
-entitlements_inherit_path=''
-if [[ "$(jq -r 'has("macos") and (.macos | has("entitlements"))' "$package_input_path")" == true ]]; then
-  entitlements_name=$(jq -er '.macos.entitlements' "$package_input_path")
-  if [[ "$entitlements_name" == '.' || "$entitlements_name" == '..' || "$entitlements_name" == */* || "$entitlements_name" == *\\* || "$entitlements_name" == *:* ]]; then
-    printf '%s\n' 'macOS entitlementsのfilenameが不正です' >&2
-    exit 1
-  fi
-  entitlements_path="$package_input_directory/$entitlements_name"
-fi
-if [[ "$(jq -r 'has("macos") and (.macos | has("entitlementsInherit"))' "$package_input_path")" == true ]]; then
-  entitlements_inherit_name=$(jq -er '.macos.entitlementsInherit' "$package_input_path")
-  if [[ "$entitlements_inherit_name" == '.' || "$entitlements_inherit_name" == '..' || "$entitlements_inherit_name" == */* || "$entitlements_inherit_name" == *\\* || "$entitlements_inherit_name" == *:* ]]; then
-    printf '%s\n' 'macOS entitlements-inheritのfilenameが不正です' >&2
-    exit 1
-  fi
-  entitlements_inherit_path="$package_input_directory/$entitlements_inherit_name"
-fi
-for optional_path in "$entitlements_path" "$entitlements_inherit_path"; do
-  if [[ -z "$optional_path" ]]; then
-    continue
-  fi
-  if [[ ! -f "$optional_path" || -L "$optional_path" ]]; then
-    printf 'entitlementsが通常fileではありません: %s\n' "$optional_path" >&2
-    exit 1
-  fi
-done
-
 release_payload_directory="$release_output_directory/payload"
 release_metadata_directory="$release_output_directory/metadata"
 mkdir -p -- "$release_payload_directory" "$release_metadata_directory"
@@ -146,6 +96,39 @@ cleanup() {
   exit "$cleanup_status"
 }
 trap cleanup EXIT
+
+if ! (cd "$central_root" && pnpm cli create-package-project \
+  --package-input-directory "$package_input_directory" --target macos \
+  --repository "$repository" --tag "$tag" --output-directory "$package_project"); then
+  printf '%s\n' 'macOS package projectの生成に失敗しました' >&2
+  exit 1
+fi
+if [[ ! -d "$package_project" || -L "$package_project" ]]; then
+  printf '%s\n' 'macOS package projectが生成されませんでした' >&2
+  exit 1
+fi
+app_id=$(jq -er '.appId' "$package_input_path")
+version=$(jq -er '.version' "$package_input_path")
+product_name=$(jq -er '.productName' "$package_input_path")
+entitlements_path=''
+entitlements_inherit_path=''
+entitlements_name=$(jq -r '.macos.entitlements // empty' "$package_input_path")
+if [[ -n "$entitlements_name" ]]; then
+  entitlements_path="$package_project/entitlements.plist"
+fi
+entitlements_inherit_name=$(jq -r '.macos.entitlementsInherit // empty' "$package_input_path")
+if [[ -n "$entitlements_inherit_name" ]]; then
+  entitlements_inherit_path="$package_project/entitlements-inherit.plist"
+fi
+for optional_path in "$entitlements_path" "$entitlements_inherit_path"; do
+  if [[ -z "$optional_path" ]]; then
+    continue
+  fi
+  if [[ ! -f "$optional_path" || -L "$optional_path" ]]; then
+    printf '生成されたentitlementsが通常fileではありません: %s\n' "$optional_path" >&2
+    exit 1
+  fi
+done
 
 python_path=$(command -v python3 || true)
 if [[ -z "$python_path" ]]; then
@@ -346,16 +329,6 @@ if ! codesign --verify --deep --strict --verbose=2 "$app_path"; then
   exit 1
 fi
 
-if ! (cd "$central_root" && pnpm cli create-package-project \
-  --package-input-directory "$package_input_directory" --target macos \
-  --repository "$repository" --tag "$tag" --output-directory "$package_project"); then
-  printf '%s\n' 'macOS package projectの生成に失敗しました' >&2
-  exit 1
-fi
-if [[ ! -d "$package_project" || -L "$package_project" ]]; then
-  printf '%s\n' 'macOS package projectが生成されませんでした' >&2
-  exit 1
-fi
 if ! (cd "$central_root" && pnpm exec electron-builder \
   --projectDir "$package_project" --prepackaged "$app_path" --publish never); then
   printf '%s\n' 'macOS ZIPの生成に失敗しました' >&2
