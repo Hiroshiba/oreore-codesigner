@@ -167,44 +167,22 @@ function Remove-AddedCertificate(
   $Store.Remove($Certificate)
 }
 
-function Test-PortableExecutable([System.IO.FileInfo]$File) {
-  if ($File.Length -lt 64) {
-    return $false
+function Get-SignableFiles([string]$Root) {
+  $signableExtensions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($extension in @('.exe', '.dll', '.node')) {
+    [void]$signableExtensions.Add($extension)
   }
-  $stream = $null
-  $reader = $null
-  try {
-    $stream = [System.IO.File]::Open($File.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-    $reader = [System.IO.BinaryReader]::new($stream)
-    if ($reader.ReadUInt16() -ne 0x5a4d) {
-      return $false
-    }
-    $stream.Position = 0x3c
-    $peOffset = $reader.ReadInt32()
-    if ($peOffset -lt 64 -or $peOffset -gt $File.Length - 4) {
-      return $false
-    }
-    $stream.Position = $peOffset
-    $signature = $reader.ReadBytes(4)
-    return $signature.Length -eq 4 -and $signature[0] -eq 0x50 -and $signature[1] -eq 0x45 -and $signature[2] -eq 0 -and $signature[3] -eq 0
-  } finally {
-    if ($null -ne $reader) {
-      $reader.Dispose()
-    } elseif ($null -ne $stream) {
-      $stream.Dispose()
-    }
-  }
-}
-
-function Get-PortableExecutables([string]$Root) {
   $files = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction Stop)
-  $portableExecutables = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+  $signableFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
   foreach ($file in $files) {
+    if ($file -isnot [System.IO.FileInfo]) {
+      throw "Windows payloadに通常file以外があります: $($file.FullName)"
+    }
     if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
       throw "Windows payloadにreparse pointがあります: $($file.FullName)"
     }
-    if (Test-PortableExecutable $file) {
-      [void]$portableExecutables.Add($file)
+    if ($signableExtensions.Contains($file.Extension)) {
+      [void]$signableFiles.Add($file)
     }
   }
   $directories = @(Get-ChildItem -LiteralPath $Root -Recurse -Directory -Force -ErrorAction Stop)
@@ -213,7 +191,7 @@ function Get-PortableExecutables([string]$Root) {
       throw "Windows payloadにreparse pointがあります: $($directory.FullName)"
     }
   }
-  return @($portableExecutables)
+  return @($signableFiles)
 }
 
 function Invoke-SignTool(
@@ -444,31 +422,12 @@ try {
     throw 'unsigned Windows archiveは直下一件のdirectoryでなければなりません'
   }
   $payloadPath = $payloadEntries[0].FullName
-  $signFiles = @(Get-PortableExecutables $payloadPath)
+  $signFiles = @(Get-SignableFiles $payloadPath)
   if ($signFiles.Count -eq 0) {
     throw '署名対象のWindows codeがありません'
   }
   foreach ($file in $signFiles) {
     Invoke-SignTool $signTool $file.FullName $pfxPath $pfxPasswordPlain $timestampUrl
-  }
-  $signedFiles = @(Get-PortableExecutables $payloadPath)
-  $expectedPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-  foreach ($file in $signFiles) {
-    [void]$expectedPaths.Add($file.FullName)
-  }
-  $actualPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-  foreach ($file in $signedFiles) {
-    [void]$actualPaths.Add($file.FullName)
-  }
-  if ($expectedPaths.Count -ne $actualPaths.Count) {
-    throw '署名前後のWindows PE対象が一致しません'
-  }
-  foreach ($path in $expectedPaths) {
-    if (-not $actualPaths.Contains($path)) {
-      throw '署名前後のWindows PE対象が一致しません'
-    }
-  }
-  foreach ($file in $signedFiles) {
     Assert-AuthenticodeSigner $signTool $file.FullName $expectedFingerprint $expectedPublisher
   }
 

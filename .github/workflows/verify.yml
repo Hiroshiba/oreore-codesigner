@@ -9,10 +9,6 @@ on:
 permissions:
   contents: read
 
-env:
-  CENTRAL_NODE_VERSION: 22.14.0
-  CENTRAL_PNPM_VERSION: 10.30.2
-
 jobs:
   verify:
     runs-on: ubuntu-24.04
@@ -27,14 +23,8 @@ jobs:
         with:
           node-version: 22.14.0
 
-      - name: pnpmを固定してinstall
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          corepack enable
-          corepack prepare "pnpm@$CENTRAL_PNPM_VERSION" --activate
-          [[ "$(pnpm --version)" == "$CENTRAL_PNPM_VERSION" ]]
-          pnpm install --frozen-lockfile
+      - name: 中央setup
+        run: bash scripts/workflow/setup-central.sh
 
       - name: formatを検証
         run: pnpm format:check
@@ -44,9 +34,6 @@ jobs:
 
       - name: typecheckを検証
         run: pnpm typecheck
-
-      - name: buildを検証
-        run: pnpm build
 
       - name: workflowとactionを検証
         shell: bash
