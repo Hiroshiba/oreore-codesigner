@@ -24,6 +24,7 @@ EXTRACT_CERTIFICATE_CN = ROOT / "extract-certificate-cn.sh"
 PUBLISH_SCRIPT = ROOT / "publish-release.sh"
 SIGN_MACOS = ROOT / "sign-macos.sh"
 SIGN_WINDOWS = ROOT / "sign-windows.ps1"
+VERIFY_WORKFLOW = ROOT.parent.parent / ".github/workflows/verify.yml"
 SIGN_RELEASE_WORKFLOW = ROOT.parent.parent / ".github/workflows/sign-release.yml"
 
 
@@ -390,6 +391,19 @@ class WorkflowFixtureTest(unittest.TestCase):
         self.assertIn("normalProjectFullPath", windows_source)
         self.assertIn("webProjectFullPath", windows_source)
         self.assertNotIn('mkdir -p "$RUNNER_TEMP/macos-assets" "$RUNNER_TEMP/macos-project"', workflow_source)
+
+    def test_verify_powershell_invocation_passes_path_explicitly(self) -> None:
+        source = VERIFY_WORKFLOW.read_text(encoding="utf-8")
+        command = source.replace(r'\"', '"').replace(r'\$', '$')
+        self.assertIn('CENTRAL_VERIFY_PS_PATH="$file" pwsh', command)
+        self.assertIn('[Environment]::GetEnvironmentVariable("CENTRAL_VERIFY_PS_PATH")', command)
+        self.assertIn("Resolve-Path -LiteralPath $path -ErrorAction Stop", command)
+        self.assertIn("Test-Path -LiteralPath $resolvedPath -PathType Leaf -ErrorAction Stop", command)
+        self.assertIn("ParseFile($resolvedPath, [ref]$tokens, [ref]$errors)", command)
+        self.assertIn("$parseError.Extent.StartLineNumber", command)
+        self.assertIn("$parseError.Extent.StartColumnNumber", command)
+        self.assertIn("$parseError.Message", command)
+        self.assertNotIn("ParseFile($args[0]", command)
 
     def test_release_false_booleans_are_valid(self) -> None:
         with tempfile.TemporaryDirectory(prefix="workflow-fixture-") as directory:

@@ -151,6 +151,28 @@ jobs:
               exit 1
             fi
             for file in "${powershell_files[@]}"; do
-              pwsh -NoProfile -NonInteractive -Command "\$tokens = \$null; \$errors = \$null; [System.Management.Automation.Language.Parser]::ParseFile(\$args[0], [ref]\$tokens, [ref]\$errors) | Out-Null; if (\$errors.Count -gt 0) { \$errors | ForEach-Object { \$_.ToString() }; exit 1 }" "$file"
+              CENTRAL_VERIFY_PS_PATH="$file" pwsh -NoProfile -NonInteractive -Command "
+                \$path = [Environment]::GetEnvironmentVariable(\"CENTRAL_VERIFY_PS_PATH\")
+                if ([string]::IsNullOrWhiteSpace(\$path)) {
+                  throw \"PowerShell script pathが空です\"
+                }
+                \$resolved = @(Resolve-Path -LiteralPath \$path -ErrorAction Stop)
+                if (\$resolved.Count -ne 1) {
+                  throw \"PowerShell script pathを一意に解決できません\"
+                }
+                \$resolvedPath = \$resolved[0].Path
+                if (-not (Test-Path -LiteralPath \$resolvedPath -PathType Leaf -ErrorAction Stop)) {
+                  throw \"PowerShell scriptが通常ファイルではありません\"
+                }
+                \$tokens = \$null
+                \$errors = \$null
+                [System.Management.Automation.Language.Parser]::ParseFile(\$resolvedPath, [ref]\$tokens, [ref]\$errors) | Out-Null
+                if (\$null -ne \$errors -and \$errors.Count -gt 0) {
+                  foreach (\$parseError in \$errors) {
+                    \"{0}:{1}:{2}: {3}\" -f \$resolvedPath, \$parseError.Extent.StartLineNumber, \$parseError.Extent.StartColumnNumber, \$parseError.Message
+                  }
+                  exit 1
+                }
+              "
             done
           fi
