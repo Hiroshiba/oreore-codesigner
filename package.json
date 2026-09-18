@@ -1,0 +1,35 @@
+{
+  "name": "personal-signing",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.x",
+    "pnpm": "10.x"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write package.json tsconfig.json eslint.config.mjs .prettierrc.json config src",
+    "format:check": "prettier --check package.json tsconfig.json eslint.config.mjs .prettierrc.json config src",
+    "cli": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@electron/osx-sign": "2.7.0",
+    "electron-builder": "26.16.1",
+    "yaml": "2.8.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.27.0",
+    "@types/node": "22.15.30",
+    "@typescript-eslint/eslint-plugin": "8.32.1",
+    "@typescript-eslint/parser": "8.32.1",
+    "eslint": "9.27.0",
+    "prettier": "3.5.3",
+    "tsx": "4.19.4",
+    "typescript": "5.8.3",
+    "typescript-eslint": "8.32.1"
+  }
+}
