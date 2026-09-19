@@ -63,11 +63,7 @@ function assertRegularFile(path: string, message: string): void {
 function readJson(path: string): unknown {
   assertRegularFile(path, "package-input.jsonがありません");
   const source = readFileSync(path, "utf8");
-  try {
-    return JSON.parse(source);
-  } catch (error) {
-    throw new Error(`package-input.jsonを解析できません: ${path}`, { cause: error });
-  }
+  return JSON.parse(source);
 }
 
 function createOutputDirectory(path: string): string {

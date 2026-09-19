@@ -19,11 +19,5 @@ export function loadSigningConfig(rootDirectory: string): SigningConfig {
   const path = resolve(rootDirectory, "config/signing.json");
   assertRegularFile(path);
   const source = readFileSync(path, "utf8");
-  let value: unknown;
-  try {
-    value = JSON.parse(source);
-  } catch (error) {
-    throw new Error(`signing.jsonを解析できません: ${path}`, { cause: error });
-  }
-  return parseSigningConfig(value);
+  return parseSigningConfig(JSON.parse(source));
 }

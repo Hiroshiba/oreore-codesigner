@@ -66,13 +66,7 @@ function equalSha512(actualBase64: string, expected: string): boolean {
 
 function parseMetadata(path: string, name: string): UpdateMetadata {
   const source = readAsset(path, name).toString("utf8");
-  let value: unknown;
-  try {
-    value = parseYaml(source);
-  } catch (error) {
-    throw new Error(`metadata YAMLを解析できません: ${name}`, { cause: error });
-  }
-  return parseUpdateMetadata(value);
+  return parseUpdateMetadata(parseYaml(source));
 }
 
 function assertMetadataFile(

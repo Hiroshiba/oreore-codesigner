@@ -22,11 +22,7 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     throw '出力先は空白だけで指定できません。'
 }
 
-try {
-    $outputItem = Get-Item -LiteralPath $OutputDirectory -Force
-} catch {
-    throw [System.InvalidOperationException]::new('出力先の確認に失敗しました。', $_.Exception)
-}
+$outputItem = Get-Item -LiteralPath $OutputDirectory -Force
 
 if ($outputItem -isnot [System.IO.DirectoryInfo]) {
     throw '出力先は既存のディレクトリで指定してください。'
@@ -54,11 +50,7 @@ foreach ($character in $Subject.ToCharArray()) {
         throw 'subjectに制御文字を指定できません。'
     }
 }
-try {
-    $null = [System.Security.Cryptography.X509Certificates.X500DistinguishedName]::new($Subject)
-} catch {
-    throw [System.ArgumentException]::new('subjectがX.500 distinguished nameとして不正です。', $_.Exception)
-}
+$null = [System.Security.Cryptography.X509Certificates.X500DistinguishedName]::new($Subject)
 
 $certificatePath = Join-Path -Path $outputItem.FullName -ChildPath 'certificate.cer'
 $pfxPath = Join-Path -Path $outputItem.FullName -ChildPath 'certificate.pfx'
@@ -108,11 +100,7 @@ try {
     }
     $certificateCreationStarted = $true
     $createdCertificate = New-SelfSignedCertificate @newCertificateParameters
-    try {
-        $createdCertificateThumbprint = $createdCertificate.Thumbprint.ToUpperInvariant()
-    } catch {
-        throw [System.InvalidOperationException]::new('生成した証明書のthumbprint取得に失敗しました。', $_.Exception)
-    }
+    $createdCertificateThumbprint = $createdCertificate.Thumbprint.ToUpperInvariant()
     if ([string]::IsNullOrEmpty($createdCertificateThumbprint)) {
         throw '生成した証明書のthumbprintが空です。'
     }
@@ -247,7 +235,7 @@ if ($null -ne $operationException -and $cleanupExceptions.Count -ne 0) {
     throw [System.AggregateException]::new('証明書生成の失敗とcleanupの失敗が発生しました。', $allExceptions)
 }
 if ($null -ne $operationException) {
-    throw [System.InvalidOperationException]::new('証明書の生成または出力に失敗しました。', $operationException)
+    throw $operationException
 }
 if ($cleanupExceptions.Count -ne 0) {
     throw [System.AggregateException]::new('cleanupに失敗しました。', $cleanupExceptions)

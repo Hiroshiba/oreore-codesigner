@@ -204,20 +204,12 @@ function readRegularFile(path: string, message: string): Buffer {
 
 function readJson(path: string): unknown {
   const source = readRegularFile(path, "JSONファイルがありません").toString("utf8");
-  try {
-    return JSON.parse(source);
-  } catch (error) {
-    throw new Error(`JSONを解析できません: ${path}`, { cause: error });
-  }
+  return JSON.parse(source);
 }
 
 function readYaml(path: string): unknown {
   const source = readRegularFile(path, "electron-builder設定がありません").toString("utf8");
-  try {
-    return parseYaml(source);
-  } catch (error) {
-    throw new Error(`electron-builder設定を解析できません: ${path}`, { cause: error });
-  }
+  return parseYaml(source);
 }
 
 function findBuilderPath(sourceRoot: string): string {
