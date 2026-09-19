@@ -22,6 +22,7 @@ type WorkflowChannel = "stable" | "beta" | "custom";
 type WorkflowContext = {
   argumentsPath: string;
   builderArgumentsPath: string;
+  cleanupMarkerPath: string;
   invoke: () => void;
   outputDirectory: string;
 };
@@ -42,6 +43,7 @@ function withMacosWorkflow(
   const outputDirectory = join(workDirectory, "release");
   const argumentsPath = join(workDirectory, "arguments.txt");
   const builderArgumentsPath = join(workDirectory, "builder-arguments.txt");
+  const cleanupMarkerPath = join(workDirectory, "cleanup-marker.txt");
   mkdirSync(sourceDirectory);
   mkdirSync(binDirectory);
   const version =
@@ -126,7 +128,7 @@ function withMacosWorkflow(
     [
       "#!/usr/bin/env bash",
       "set -Eeuo pipefail",
-      'if [[ "$WORKFLOW_TEST_MODE" == cleanup && "$*" == *central-package-macos.* ]]; then exit 1; fi',
+      'if [[ "$WORKFLOW_TEST_MODE" == cleanup && "$*" == *central-package-macos.* ]]; then printf "%s" cleanup > "$WORKFLOW_TEST_CLEANUP_MARKER"; exit 1; fi',
       'exec /usr/bin/rm "$@"',
       ""
     ].join("\n")
@@ -141,6 +143,7 @@ function withMacosWorkflow(
     RUNNER_TEMP: workDirectory,
     WORKFLOW_TEST_ARGUMENTS: argumentsPath,
     WORKFLOW_TEST_BUILDER_ARGUMENTS: builderArgumentsPath,
+    WORKFLOW_TEST_CLEANUP_MARKER: cleanupMarkerPath,
     WORKFLOW_TEST_EXPECT_CONFIG_MERGE: "true",
     WORKFLOW_TEST_EXPECTED_CHANNEL: expectedChannel,
     WORKFLOW_TEST_METADATA_NAME: metadataName,
@@ -164,7 +167,7 @@ function withMacosWorkflow(
     );
   };
   try {
-    run({ argumentsPath, builderArgumentsPath, invoke, outputDirectory });
+    run({ argumentsPath, builderArgumentsPath, cleanupMarkerPath, invoke, outputDirectory });
   } finally {
     rmSync(workDirectory, { recursive: true, force: true });
   }
@@ -240,8 +243,10 @@ void test("macOSの必須出力重複を検出できる", () => {
 });
 
 void test("macOSのcleanup失敗を検出できる", () => {
-  withMacosWorkflow("cleanup", "beta", ({ invoke }) => {
+  withMacosWorkflow("cleanup", "beta", ({ cleanupMarkerPath, invoke, outputDirectory }) => {
     assert.throws(invoke);
+    assert.equal(readFileSync(cleanupMarkerPath, "utf8"), "cleanup");
+    assert.equal(existsSync(join(outputDirectory, "payload/app.zip")), true);
   });
 });
 

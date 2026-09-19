@@ -6,43 +6,33 @@ import { parseSemVer } from "./schema.js";
 
 const exactPnpmPattern =
   /^pnpm@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[A-Za-z0-9._-]+)?$/;
-const noPublishSchema = z
+const targetSettingsSchema = z
   .object({
     publish: z.never().optional()
+  })
+  .passthrough();
+const targetSchema = z.union([
+  z.string(),
+  targetSettingsSchema,
+  z.array(z.union([z.string(), targetSettingsSchema]))
+]);
+const noPublishSchema = z
+  .object({
+    publish: z.never().optional(),
+    target: targetSchema.optional()
   })
   .passthrough();
 const builderConfigSchema = z
   .object({
     extends: z.never().optional(),
     publish: z.never().optional(),
+    target: targetSchema.optional(),
     mac: noPublishSchema.optional(),
     win: noPublishSchema.optional(),
     nsis: noPublishSchema.optional(),
     nsisWeb: noPublishSchema.optional()
   })
-  .passthrough()
-  .superRefine((value, context) => {
-    const inspect = (item: unknown, path: string[]): void => {
-      if (Array.isArray(item)) {
-        item.forEach((child, index) => inspect(child, [...path, String(index)]));
-        return;
-      }
-      if (typeof item !== "object" || item == null) {
-        return;
-      }
-      for (const [key, child] of Object.entries(item)) {
-        if (key === "publish") {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "publishを設定できません",
-            path: [...path, key]
-          });
-        }
-        inspect(child, [...path, key]);
-      }
-    };
-    inspect(value, []);
-  });
+  .passthrough();
 const packageJsonSchema = z
   .object({
     version: z.string(),

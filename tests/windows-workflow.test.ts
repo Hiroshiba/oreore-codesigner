@@ -33,6 +33,7 @@ function realPnpmPath(): string {
 
 function createFixture(mode: WorkflowMode): {
   argumentsPath: string;
+  cleanupPath: string;
   outputDirectory: string;
   run: () => void;
 } {
@@ -121,7 +122,6 @@ function createFixture(mode: WorkflowMode): {
       "  'files:',",
       "  '  - url: ' + webInstaller,",
       "  '    sha512: ' + sha512,",
-      "  '    size: 7',",
       "  'path: ' + webInstaller,",
       "  'sha512: ' + sha512,",
       "  'packages:',",
@@ -197,7 +197,7 @@ function createFixture(mode: WorkflowMode): {
       stdio: "pipe"
     });
   };
-  return { argumentsPath, outputDirectory, run: invoke };
+  return { argumentsPath, cleanupPath, outputDirectory, run: invoke };
 }
 
 function withFixture(
@@ -284,7 +284,9 @@ void windowsTest("Windows scriptがnsis.zipをNSIS Web packageとして受け入
 });
 
 void windowsTest("Windows scriptのcleanup失敗を検出する", () => {
-  withFixture("cleanup", ({ run }) => {
+  withFixture("cleanup", ({ cleanupPath, outputDirectory, run }) => {
     assert.throws(run);
+    assert.match(readFileSync(cleanupPath, "utf8"), /central-package-windows-/);
+    assert.equal(existsSync(join(outputDirectory, "payload/App Setup 1.0.0-foo-mac.1.exe")), true);
   });
 });

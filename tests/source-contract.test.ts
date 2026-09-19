@@ -125,7 +125,8 @@ void test("builder設定のpublishとextendsをすべて拒否する", () => {
     "win:\n  publish: null",
     "nsis:\n  publish: null",
     "nsisWeb:\n  publish: null",
-    "mac:\n  target:\n    - publish: github",
+    "target:\n  - publish: null",
+    "mac:\n  target:\n    - publish: null",
     "extends: base.yml"
   ];
   for (const field of fields) {
@@ -133,6 +134,13 @@ void test("builder設定のpublishとextendsをすべて拒否する", () => {
       assert.throws(() => validateSourceContract(source));
     });
   }
+});
+
+void test("extraMetadataのpublishはsource契約の対象外として許可する", () => {
+  const config = ["extraMetadata:", "  publish:", "    provider: github", ""].join("\n");
+  withSource("1.0.0", config, validPackage("1.0.0"), "electron-builder.yml", (source) => {
+    assert.doesNotThrow(() => validateSourceContract(source));
+  });
 });
 
 void test("package.jsonのbuildフィールドを拒否する", () => {

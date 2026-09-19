@@ -18,11 +18,11 @@ const fileNameSchema = z
     "basenameを指定してください"
   );
 const sha512Schema = z.string().regex(/^[A-Za-z0-9+/]{86}==$/, "metadata sha512が不正です");
-const metadataFileSchema = z
+const webMetadataFileSchema = z
   .object({
     url: fileNameSchema,
-    size: z.number().int().nonnegative(),
     sha512: sha512Schema,
+    size: z.number().int().nonnegative().optional(),
     blockMapSize: z.number().int().nonnegative().optional()
   })
   .strict();
@@ -37,7 +37,7 @@ const webPackageSchema = z
 const webMetadataSchema = z
   .object({
     version: z.string(),
-    files: z.array(metadataFileSchema).min(1),
+    files: z.array(webMetadataFileSchema).min(1),
     path: fileNameSchema,
     sha512: sha512Schema,
     packages: z
@@ -186,7 +186,8 @@ function selectWindowsOutput(
       `NSIS Web metadata versionがexpected-versionと一致しません: ${webMetadataPath}`
     );
   }
-  if (!webMetadata.files.some((file) => file.url === webMetadata.path)) {
+  const webMetadataFile = webMetadata.files.find((file) => file.url === webMetadata.path);
+  if (webMetadataFile == undefined) {
     throw new Error(`NSIS Web metadata pathがfilesにありません: ${webMetadataPath}`);
   }
   if (extname(webMetadata.path).toLowerCase() !== ".exe") {
@@ -197,6 +198,12 @@ function selectWindowsOutput(
     throw new Error(`NSIS Web metadataのx64 packageがnsis.7zではありません: ${webPackage.file}`);
   }
   const webInstallerFile = findUniqueFile(webDirectory, webMetadata.path);
+  if (webMetadataFile.size != undefined) {
+    const webInstallerSize = lstatSync(webInstallerFile.absolutePath).size;
+    if (webInstallerSize !== webMetadataFile.size) {
+      throw new Error(`NSIS Web metadataのfile sizeが実fileと一致しません: ${webMetadata.path}`);
+    }
+  }
   const webPackageFile = findUniqueFile(webDirectory, webPackage.file);
   return {
     platform: "windows",

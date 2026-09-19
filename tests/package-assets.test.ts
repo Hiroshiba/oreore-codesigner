@@ -33,13 +33,17 @@ function windowsMetadata(version: string, installer: string): string {
   ].join("\n");
 }
 
-function webMetadata(version: string, installer: string, packageName: string): string {
-  return [
+function webMetadata(
+  version: string,
+  installer: string,
+  packageName: string,
+  includeSize: boolean
+): string {
+  const lines = [
     `version: ${version}`,
     "files:",
     `  - url: ${installer}`,
     `    sha512: ${sha512}`,
-    "    size: 7",
     `path: ${installer}`,
     `sha512: ${sha512}`,
     "packages:",
@@ -49,7 +53,11 @@ function webMetadata(version: string, installer: string, packageName: string): s
     `    path: ${packageName}`,
     `    file: ${packageName}`,
     ""
-  ].join("\n");
+  ];
+  if (includeSize) {
+    lines.splice(4, 0, "    size: 7");
+  }
+  return lines.join("\n");
 }
 
 function withOutput(run: (directory: string) => void): void {
@@ -109,7 +117,7 @@ void test("Windowsはfoo-mac channelの通常NSISとNSIS Webを独立に選ぶ",
     writeFileSync(join(directory, "foo-mac.yml"), windowsMetadata("1.0.0-foo-mac.1", installer));
     writeFileSync(
       join(directory, "nsis-web", "foo-mac.yml"),
-      webMetadata("1.0.0-foo-mac.1", webInstaller, packageName)
+      webMetadata("1.0.0-foo-mac.1", webInstaller, packageName, false)
     );
     writeFileSync(join(directory, "nsis-web", "unrelated.exe"), "extra");
     writeFileSync(join(directory, "nsis-web", "unrelated.nsis.7z"), "extra");
@@ -124,6 +132,30 @@ void test("Windowsはfoo-mac channelの通常NSISとNSIS Webを独立に選ぶ",
   });
 });
 
+void test("NSIS Web metadataのfile sizeは省略または実fileと一致する値を受理する", () => {
+  withOutput((directory) => {
+    const webDirectory = join(directory, "nsis-web");
+    mkdirSync(join(directory, "nested"));
+    mkdirSync(webDirectory);
+    const installer = "installer.exe";
+    const webInstaller = "web.exe";
+    const packageName = "package-x64.nsis.7z";
+    writeFileSync(join(directory, "nested", installer), "exe");
+    writeFileSync(join(directory, "nested", `${installer}.blockmap`), "blockmap");
+    writeFileSync(join(webDirectory, webInstaller), "web-exe");
+    writeFileSync(join(webDirectory, packageName), "web-package");
+    writeFileSync(join(directory, "latest.yml"), windowsMetadata("1.0.0", installer));
+    const metadataPath = join(webDirectory, "latest.yml");
+    writeFileSync(metadataPath, webMetadata("1.0.0", webInstaller, packageName, true));
+    assert.doesNotThrow(() => validatePackagedOutput(directory, "windows", "latest", "1.0.0"));
+    writeFileSync(
+      metadataPath,
+      webMetadata("1.0.0", webInstaller, packageName, true).replace("size: 7", "size: 8")
+    );
+    assert.throws(() => validatePackagedOutput(directory, "windows", "latest", "1.0.0"));
+  });
+});
+
 void test("Windowsの必須出力欠落と重複を拒否する", () => {
   withOutput((directory) => {
     mkdirSync(join(directory, "nsis-web"));
@@ -133,7 +165,7 @@ void test("Windowsの必須出力欠落と重複を拒否する", () => {
     );
     writeFileSync(
       join(directory, "nsis-web", "foo-mac.yml"),
-      webMetadata("1.0.0-foo-mac.1", "web.exe", "package-x64.nsis.7z")
+      webMetadata("1.0.0-foo-mac.1", "web.exe", "package-x64.nsis.7z", false)
     );
     assert.throws(() => validatePackagedOutput(directory, "windows", "foo-mac", "1.0.0-foo-mac.1"));
   });
@@ -152,7 +184,7 @@ void test("Windowsの必須出力欠落と重複を拒否する", () => {
     writeFileSync(join(directory, "foo-mac.yml"), windowsMetadata("1.0.0-foo-mac.1", installer));
     writeFileSync(
       join(directory, "nsis-web", "foo-mac.yml"),
-      webMetadata("1.0.0-foo-mac.1", webInstaller, packageName)
+      webMetadata("1.0.0-foo-mac.1", webInstaller, packageName, false)
     );
     assert.throws(() => validatePackagedOutput(directory, "windows", "foo-mac", "1.0.0-foo-mac.1"));
   });
@@ -172,7 +204,7 @@ void test("NSIS Webのnsis.zipとmetadata version不一致を拒否する", () =
     writeFileSync(join(directory, "foo-mac.yml"), windowsMetadata("1.0.0-foo-mac.1", installer));
     writeFileSync(
       join(directory, "nsis-web", "foo-mac.yml"),
-      webMetadata("1.0.0-foo-mac.1", webInstaller, packageName)
+      webMetadata("1.0.0-foo-mac.1", webInstaller, packageName, false)
     );
     assert.throws(() => validatePackagedOutput(directory, "windows", "foo-mac", "1.0.0-foo-mac.1"));
   });
