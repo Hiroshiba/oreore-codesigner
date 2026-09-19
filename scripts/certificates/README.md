@@ -1,6 +1,6 @@
 # 個人用証明書の生成
 
-両スクリプトは、既存の空ディレクトリだけを出力先に受け付けます。生成途中の失敗で既存ファイルを上書きせず、パスワードは対話入力だけで受け取ります。
+両スクリプトは、既存の空ディレクトリだけを出力先に受け付けます。パスワードは対話入力だけで受け取ります。
 
 macOS:
 
@@ -8,7 +8,7 @@ macOS:
 bash scripts/certificates/create-macos-certificate.sh OUTPUT_DIRECTORY DISPLAY_NAME VALIDITY_DAYS
 ```
 
-`certificate.cer`、`certificate.pem`、`certificate.p12`、`fingerprint.txt` を出力します。秘密鍵は一時ディレクトリ内だけで生成し、最終出力には平文秘密鍵を残しません。`certificate.p12` だけが秘密鍵を含む成果物です。
+`certificate.cer`、`certificate.p12`、`fingerprint.txt` を出力します。秘密鍵は一時ディレクトリ内だけで生成し、最終出力には平文秘密鍵を残しません。`certificate.p12` だけが秘密鍵を含む成果物です。
 
 Windows:
 

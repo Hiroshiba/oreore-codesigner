@@ -20,13 +20,13 @@
 | `windows-signing` の environment secret | `WINDOWS_CERTIFICATE_PFX_BASE64` | PFX を base64 にした値     |
 | `windows-signing` の environment secret | `WINDOWS_CERTIFICATE_PASSWORD`   | PFX のパスワード           |
 
-取得と公開のジョブは repository の App 設定を使うため、environment へ同名設定を複製する必要はありません。
-ビルドジョブには、取得・公開用トークンや署名鍵を渡しません。
+取得と package のジョブは repository の App 設定を使うため、environment へ同名設定を複製する必要はありません。
+package job には対象 repository の read token と、その OS の署名 secret を渡します。公開用 write token は publish job だけが使います。
 
 App 自体には Contents write が必要ですが、取得用トークンは Contents read、公開用トークンは Contents write に制限して別々に発行します。
 どちらも実行時に指定したリポジトリ一つだけを対象にし、ジョブ終了時に失効させます。
 ワークフローは既定ブランチ以外からの実行を拒否します。
-署名の承認者は、対象リポジトリ、タグ、取得時に固定したコミットを確認してください。
+署名 environment の承認者は、対象リポジトリ、タグ、取得時に固定したコミットを確認してください。
 
 ## 証明書の準備
 
@@ -47,16 +47,15 @@ base64 にしても秘密情報のため、値をログや文書へ表示しな�
 | `certificatePath` | 中央リポジトリ内の公開証明書への相対パス                                  |
 | `fingerprint`     | SHA-256 fingerprint。64 桁の 16 進数、または各バイトを `:` で区切った形式 |
 | `displayName`     | 証明書の CN に対応する署名者の表示名                                      |
-| `timestampUrl`    | Windows だけに設定する HTTPS のタイムスタンプサーバー                     |
 
 `certificatePath` へ置くのは公開証明書です。
 P12、PFX、平文の秘密鍵をリポジトリへ追加しないでください。
-Windows のソース設定に `publisherName` がある場合は、`windows.displayName` と一致させます。
 `configured: false` の OS は、証明書を設定するまで署名できません。
 
 公開証明書と fingerprint の変更はレビュー対象にします。
 利用者がダウンロード先とは別の信頼できる経路で fingerprint を照合できるようにしてください。
-署名処理では Secrets 内の証明書と公開設定を照合します。
+macOS の署名名を `config/signing.json` に設定すると、package job が `CSC_NAME` に使います。
+publisher、GUID、icon、entitlements などのアプリ設定は対象ソースの electron-builder 設定を使います。
 
 ## 対象アプリと Release
 

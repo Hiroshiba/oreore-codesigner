@@ -31,8 +31,8 @@ macOS は `configured: false` で、証明書を設定するまでは署名で�
 ## 権限と端末の信頼
 
 ソース取得では対象リポジトリだけを読める GitHub App トークンを使い、タグをコミット SHA に固定します。
-アプリのコードと builder を動かすビルドジョブには、取得・公開用トークンや署名鍵を渡しません。
-署名ジョブは検証したアプリ本体と静的な梱包設定を受け取り、中央のコードで署名します。
+macOS と Windows は同じ SHA のソースを checkout し、各 OS のジョブ内で install、build、署名、梱包まで実行します。
+アプリのコードと builder を動かすジョブには公開用 token を渡しません。
 公開ジョブだけが、対象リポジトリへ書き込む別のトークンを使います。
 詳しくは[構成と信頼境界](docs/architecture.md)を参照してください。
 
@@ -46,8 +46,8 @@ macOS で証明書単位の実行許可を試す [system policy profile](experim
 
 ## 検証状況
 
-このリポジトリではテストコードを実装しない方針です。
-[verify ワークフロー](.github/workflows/verify.yml)で、format、lint、型、ワークフローとスクリプトの構文を静的に検査します。
+`tests/` の fixture で更新 metadata の必須 asset、version、Base64 の SHA-512、SemVer を検証します。
+[verify ワークフロー](.github/workflows/verify.yml)で、format、lint、型、test、workflow とスクリプトの構文を検査します。
 実際の GitHub Actions、証明書を使った署名・公開、実機での起動と更新は未検証です。
 差分更新と、差分取得に失敗した場合の全量更新も実機確認が必要です。
 

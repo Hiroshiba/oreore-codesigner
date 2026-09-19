@@ -28,11 +28,6 @@ if [[ ! "$source_sha" =~ ^[0-9A-Fa-f]{40}$ ]]; then
   exit 1
 fi
 
-if [[ ! "$expected_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[A-Za-z-][0-9A-Za-z-]*))*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
-  printf '%s\n' 'expected-versionはSemVer形式で指定してください' >&2
-  exit 1
-fi
-
 if [[ -z "${GH_TOKEN:-}" ]]; then
   printf '%s\n' 'GH_TOKENが必要です' >&2
   exit 1
@@ -76,13 +71,19 @@ umask 077
 work_directory=$(mktemp -d "${TMPDIR:-/tmp}/publish-release.XXXXXX")
 cleanup() {
   local status=$?
+  local cleanup_status=0
   if ! rm -rf -- "$work_directory"; then
     printf '%s\n' '一時directoryの削除に失敗しました' >&2
-    if (( status == 0 )); then
-      status=1
-    fi
+    cleanup_status=1
   fi
-  exit "$status"
+  if (( status != 0 && cleanup_status != 0 )); then
+    printf '%s\n' 'Release公開の失敗とcleanupの失敗が発生しました' >&2
+    exit 1
+  fi
+  if (( status != 0 )); then
+    exit "$status"
+  fi
+  exit "$cleanup_status"
 }
 trap cleanup EXIT
 
@@ -95,18 +96,16 @@ declare -A asset_name_keys=()
 collect_assets() {
   local release_directory=$1
   local section=$2
-  local label=$3
-  local listing_path="$work_directory/$label-$section.list"
   local asset_path
   local asset_name
   local asset_key
   local destination_path
+  local -a asset_paths
 
-  if ! find "$release_directory/$section" -mindepth 1 -maxdepth 1 -print0 >"$listing_path"; then
-    printf 'asset一覧を取得できません: %s/%s\n' "$label" "$section" >&2
-    return 1
-  fi
-  while IFS= read -r -d '' asset_path; do
+  shopt -s nullglob dotglob
+  asset_paths=("$release_directory/$section"/*)
+  shopt -u nullglob dotglob
+  for asset_path in "${asset_paths[@]}"; do
     asset_name=${asset_path##*/}
     if [[ ! -f "$asset_path" || -L "$asset_path" || -z "$asset_name" || "$asset_name" == '.' || "$asset_name" == '..' || "$asset_name" == */* || "$asset_name" =~ \\ || "$asset_name" =~ [[:cntrl:]] ]]; then
       printf 'assetはbasenameのregular fileでなければなりません: %s\n' "$asset_path" >&2
@@ -132,13 +131,13 @@ collect_assets() {
     else
       metadata_names+=("$asset_name")
     fi
-  done <"$listing_path"
+  done
 }
 
-collect_assets "$mac_release_directory" payload mac
-collect_assets "$mac_release_directory" metadata mac
-collect_assets "$windows_release_directory" payload windows
-collect_assets "$windows_release_directory" metadata windows
+collect_assets "$mac_release_directory" payload
+collect_assets "$mac_release_directory" metadata
+collect_assets "$windows_release_directory" payload
+collect_assets "$windows_release_directory" metadata
 
 if ! (cd "$central_directory" && pnpm cli validate-release-assets --assets-directory "$combined_directory" --expected-version "$expected_version"); then
   printf '%s\n' 'release assetの検証に失敗しました' >&2
@@ -172,26 +171,16 @@ fi
 
 upload_assets() {
   local section=$1
-  local list_path="$work_directory/$section-upload.list"
   local asset_name
   local attempt
   local upload_succeeded
-  : >"$list_path"
+  local -a asset_names
   if [[ "$section" == payload ]]; then
-    for asset_name in "${payload_names[@]}"; do
-      printf '%s\n' "$asset_name" >>"$list_path"
-    done
+    asset_names=("${payload_names[@]}")
   else
-    for asset_name in "${metadata_names[@]}"; do
-      printf '%s\n' "$asset_name" >>"$list_path"
-    done
+    asset_names=("${metadata_names[@]}")
   fi
-  if ! LC_ALL=C sort -o "$list_path" "$list_path"; then
-    printf 'asset filenameの並べ替えに失敗しました: %s\n' "$section" >&2
-    return 1
-  fi
-  while IFS= read -r asset_name; do
-    [[ -n "$asset_name" ]] || continue
+  for asset_name in "${asset_names[@]}"; do
     upload_succeeded=false
     for attempt in 1 2 3; do
       if gh release upload "$tag" "$combined_directory/$asset_name" --repo "$repository" --clobber; then
@@ -206,7 +195,7 @@ upload_assets() {
       printf 'assetの公開に失敗しました: %s\n' "$asset_name" >&2
       return 1
     fi
-  done <"$list_path"
+  done
 }
 
 upload_assets payload

@@ -1,61 +1,43 @@
 # 構成と信頼境界
 
 このリポジトリを中央、署名対象アプリのリポジトリをソースと呼びます。
-中央は署名鍵と公開権限を管理し、ソースのコードを実行する環境から分離します。
+中央は署名鍵と公開権限を管理し、ソースの tag と commit SHA を固定します。
+対象ソースと依存関係、ビルド hook は管理者が信頼する前提で、各 OS の同じジョブ内でビルド、署名、梱包を行います。
 公開対象は GitHub App の Selected repositories で管理します。
 
 ## ジョブと受け渡すデータ
 
-| ジョブ                         | 処理                                                                            | 使用する秘密情報と権限                       |
-| ------------------------------ | ------------------------------------------------------------------------------- | -------------------------------------------- |
-| `acquire-source`               | 入力した repository と tag を検証し、タグを SHA に固定してソース archive を保存 | 対象リポジトリ一つの Contents read トークン  |
-| `build-macos`、`build-windows` | 固定したソースから x64 のアプリ本体と静的な梱包設定を生成                       | 取得・公開用トークンと署名鍵を持たない       |
-| `sign-macos`、`sign-windows`   | 成果物を検証し、中央のコードで署名・梱包                                        | その OS の署名鍵                             |
-| `publish-release`              | 両 OS の成果物と更新メタデータを照合し、既存 Release へアップロード             | 対象リポジトリ一つの Contents write トークン |
+| ジョブ | 処理 | 使用する秘密情報と権限 |
+| --- | --- | --- |
+| `resolve-source` | 入力した repository と tag を検証し、tag を checkout して commit SHA を固定 | 対象リポジトリ一つの Contents read トークン |
+| `package-macos` | 固定 SHA のソースで install、build、electron-builder による署名と ZIP 梱包を実行 | macOS environment の P12 とパスワード、Contents read |
+| `package-windows` | 固定 SHA のソースで install、build、electron-builder による署名と NSIS 梱包を実行 | Windows environment の PFX とパスワード、Contents read |
+| `publish-release` | 両 OS の成果物、version、更新 metadata、tag SHA、Release 状態を検証して公開 | 対象リポジトリ一つの Contents write トークン |
 
-取得時のソース SHA はジョブの出力として渡します。
-ビルドジョブはソース archive に記録された SHA を照合し、公開ジョブもタグが同じ SHA を指すことを確認します。
-取得後にタグを移動すると、公開前に停止します。
-ワークフローは中央の既定ブランチから実行し、使用する中央コードもその実行の SHA に固定します。
+中央とソースの checkout はいずれも workflow 実行時の中央 SHA または `resolve-source` の固定 SHA を使います。
+両 OS は同じ `source_sha` を checkout し、ソース側で `pnpm install --frozen-lockfile` と `pnpm run build` を実行します。
+公開前に tag の現在 SHA が固定 SHA と一致することを確認します。
 外部 Action はコミット SHA で参照します。
 
-ビルドジョブは `pnpm run build` とソース側の electron-builder を実行します。
-`asar`、`extraResources`、ビルド用フックなど、アプリ固有の処理はここで反映します。
-署名ジョブへ渡すものは、梱包前のアプリ本体、`package-input.json`、必要な entitlements と Windows のアイコンです。
-`package-input.json` は実行中に生成する受け渡し用ファイルで、識別子、バージョン、ファイル名やインストーラーの設定など、必要な静的値だけを含みます。
-ソースがこのファイルを管理する必要はありません。
+## ソース設定の扱い
 
-署名ジョブは受け取った設定をスキーマで検証し、中央が生成した一時 package project を使います。
-ソースの package scripts、builder 設定全体、フックは署名環境へ持ち込みません。
-受け取ったアプリや内部コードも実行しません。
-`--prepackaged` による梱包前に、アプリ本体と内部の実行可能コードへ署名します。
+electron-builder の appId、version、productName、GUID、publisher、icon、entitlements、artifactName、NSIS 設定、hook はソース側の設定を正本として直接使います。
+中央で `package-input.json` や一時 package project を生成したり、ソース設定を再構築したりしません。
+`electron-builder` の CLI には OS、x64、出力先、`forceCodeSigning`、Release の generic publish URL だけを渡します。
 
-## 成果物と秘密情報の検査
+macOS は electron-builder に `CSC_LINK`、`CSC_KEY_PASSWORD` と必要な `CSC_NAME` を渡し、一時 keychain の作成と削除を任せます。
+Windows は `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` だけを使い、中央で SignTool を呼んだり `.dll` や `.node` を総当たりで再署名したりしません。
+秘密値と一時署名ストアの後始末は各処理の終了時に行い、処理と cleanup の両方が失敗した場合は両方を報告します。
 
-archive は展開前に検査し、絶対パス、展開先の外へ出るパス、重複パス、hardlink、特殊ファイル、setuid・setgid を拒否します。
-macOS の内部 symlink は、循環や未解決の参照がなく、展開先の内側に収まる場合だけ許可します。
-Windows では symlink を許可しません。
+## 成果物と公開
 
-macOS はアプリの識別子とバージョンを確認し、証明書の fingerprint と署名 identity を照合します。
-本体と内部コードを署名した後、署名を検証します。
-Windows は PFX と公開証明書を照合し、アプリ本体に含まれる `.exe`、`.dll`、`.node` を署名します。
-署名後にそれぞれの署名と fingerprint、publisher を検証し、生成した NSIS と NSIS Web のインストーラーも検証します。
-署名に使う一時ファイル、macOS の一時キーチェーン、Windows で一時追加した証明書は終了時に削除し、後始末の失敗もエラーとして扱います。
+macOS は ZIP、blockmap、更新 metadata を生成します。
+Windows は通常 NSIS の installer、blockmap、更新 metadata と、NSIS Web の installer、7z package を生成します。
+通常 NSIS の metadata は通常 installer を参照し、NSIS Web の成果物は初回導入に使います。
+builder の余分な出力は公開対象へ選びません。
 
-GitHub App トークンは取得と公開で別々に発行し、どちらも対象リポジトリ一つへ限定します。
-公開用トークンは署名完了後の公開ジョブで発行し、ジョブ終了時に失効させます。
-GitHub-hosted runner の別ジョブを前提とし、self-hosted runner を使う場合はジョブごとに OS 環境を隔離してください。
-
-## 公開と更新
-
-macOS は ZIP、Windows は通常 NSIS と NSIS Web を生成します。
-Windows の更新メタデータは通常 NSIS を参照し、NSIS Web のインストーラーと取得するパッケージは初回導入に使います。
-配布ファイル、対応する blockmap、更新メタデータを検証して公開します。
-実際のファイルと更新メタデータの参照、サイズ、SHA-512、バージョンを照合します。
-
-指定タグの既存 Release へ、同名ファイルを `gh release upload --clobber` で上書きします。
-配布ファイルを先に、更新メタデータを最後に公開します。
-この順序でも置換全体は原子的にはならず、失敗すると旧版と新版が混在したり、ファイルが欠けたりします。
-失敗した公開は、同じ Actions 実行に保存した署名済み成果物を再アップロードして修復します。
+公開前に両 OS の version、asset の一意性、metadata が参照する実ファイルの存在、サイズ、Base64 の SHA-512、blockmap size を検証します。
+既存かつ変更可能な Release だけを対象にし、配布ファイルと blockmap を先に、更新 metadata を最後に `gh release upload --clobber` で公開します。
+公開処理は原子的ではないため、失敗時は同じ実行の署名済み artifact で再実行します。
 
 初期設定は[GitHub の初期設定](github-setup.md)、アプリ側の準備は[ソースの要件](source-requirements.md)、公開中断時の操作は[運用手順](operations.md)を参照してください。

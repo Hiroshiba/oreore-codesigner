@@ -20,12 +20,6 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   fail 'このスクリプトはmacOSで実行してください。'
 fi
 
-for required_command in uname openssl security mktemp chmod awk grep cmp mv cat rm; do
-  if ! command -v "$required_command" >/dev/null 2>&1; then
-    fail "必要なコマンドが見つかりません: $required_command"
-  fi
-done
-
 output_directory=$1
 display_name=$2
 validity_days=$3
@@ -86,7 +80,6 @@ if [[ "$p12_password" != "$p12_password_confirmation" ]]; then
 fi
 
 for artifact_path in \
-  "$output_directory/certificate.pem" \
   "$output_directory/certificate.cer" \
   "$output_directory/certificate.p12" \
   "$output_directory/fingerprint.txt"; do
@@ -98,25 +91,12 @@ done
 umask 077
 temp_directory=$(mktemp -d "${TMPDIR:-/tmp}/personal-signing.XXXXXXXX")
 
-committed_paths=()
-cleanup_output=true
-
 cleanup() {
   local status=$?
   local cleanup_failed=0
   local cleanup_detail=''
 
   trap - EXIT
-  if [[ "$cleanup_output" == true ]]; then
-    for committed_path in "${committed_paths[@]}"; do
-      if [[ -e "$committed_path" || -L "$committed_path" ]]; then
-        if ! rm -f -- "$committed_path"; then
-          cleanup_failed=1
-          cleanup_detail="${cleanup_detail} 出力削除失敗: $committed_path"
-        fi
-      fi
-    done
-  fi
   if [[ -d "$temp_directory" ]]; then
     if ! rm -rf -- "$temp_directory"; then
       cleanup_failed=1
@@ -220,32 +200,13 @@ fi
 printf 'subject=CN=%s\nsha1_fingerprint=%s\nsha256_fingerprint=%s\nvalidity_days=%s\n' \
   "$display_name" "$sha1_fingerprint" "$sha256_fingerprint" "$validity_days" > "$fingerprint_path"
 
-mv -n "$certificate_pem_path" "$output_directory/certificate.pem"
-if [[ -e "$certificate_pem_path" || -L "$certificate_pem_path" ]]; then
-  fail '公開PEMの出力先が既に存在します。'
-fi
-committed_paths+=("$output_directory/certificate.pem")
-
 mv -n "$certificate_der_path" "$output_directory/certificate.cer"
-if [[ -e "$certificate_der_path" || -L "$certificate_der_path" ]]; then
-  fail 'DER CERの出力先が既に存在します。'
-fi
-committed_paths+=("$output_directory/certificate.cer")
 
 mv -n "$p12_path" "$output_directory/certificate.p12"
-if [[ -e "$p12_path" || -L "$p12_path" ]]; then
-  fail 'P12の出力先が既に存在します。'
-fi
-committed_paths+=("$output_directory/certificate.p12")
 
 mv -n "$fingerprint_path" "$output_directory/fingerprint.txt"
-if [[ -e "$fingerprint_path" || -L "$fingerprint_path" ]]; then
-  fail 'fingerprint情報の出力先が既に存在します。'
-fi
-committed_paths+=("$output_directory/fingerprint.txt")
 
 chmod 600 "$output_directory/certificate.p12"
-chmod 644 "$output_directory/certificate.pem" "$output_directory/certificate.cer" "$output_directory/fingerprint.txt"
-cleanup_output=false
+chmod 644 "$output_directory/certificate.cer" "$output_directory/fingerprint.txt"
 
 printf '証明書を生成しました: %s\n' "$output_directory"

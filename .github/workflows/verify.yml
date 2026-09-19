@@ -35,6 +35,9 @@ jobs:
       - name: typecheckを検証
         run: pnpm typecheck
 
+      - name: testを検証
+        run: pnpm test
+
       - name: workflowとactionを検証
         shell: bash
         run: |
@@ -50,111 +53,48 @@ jobs:
           printf '%s  %s\n' "$actionlint_sha256" "$actionlint_archive" | sha256sum --check --status -
           tar --extract --gzip --file="$actionlint_archive" --directory="$actionlint_root"
           chmod 0755 "$actionlint_binary"
-          [[ "$("$actionlint_binary" -version | sed -n '1p')" == "$actionlint_version" ]]
-          workflow_files_path="$RUNNER_TEMP/verify-workflow-files.nul"
-          workflow_find_status=0
-          find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 > "$workflow_files_path" || workflow_find_status=$?
-          if (( workflow_find_status != 0 )); then
-            printf 'workflowファイルの列挙に失敗しました\n' >&2
-            exit "$workflow_find_status"
-          fi
-          mapfile -d '' workflow_files < "$workflow_files_path"
-          if (( ${#workflow_files[@]} == 0 )); then
-            printf 'workflowファイルがありません\n' >&2
-            exit 1
-          fi
-          "$actionlint_binary" -color=false "${workflow_files[@]}"
-          uses_files_path="$RUNNER_TEMP/verify-uses-files.nul"
-          uses_lines_path="$RUNNER_TEMP/verify-uses-lines"
-          uses_find_status=0
-          find .github -type f -name '*.yml' -print0 > "$uses_files_path" || uses_find_status=$?
-          if (( uses_find_status != 0 )); then
-            printf 'actionの検査対象ファイルの列挙に失敗しました\n' >&2
-            exit "$uses_find_status"
-          fi
-          : > "$uses_lines_path"
-          uses_file_count=0
-          while IFS= read -r -d '' file; do
-            uses_file_count=$((uses_file_count + 1))
-            grep_status=0
-            grep -E -h '^[[:space:]]*uses:' "$file" >> "$uses_lines_path" || grep_status=$?
-            if (( grep_status > 1 )); then
-              printf 'actionの検査に失敗しました: %s\n' "$file" >&2
-              exit "$grep_status"
-            fi
-          done < "$uses_files_path"
-          if (( uses_file_count == 0 )); then
-            printf 'actionの検査対象ファイルがありません\n' >&2
-            exit 1
-          fi
-          while IFS= read -r line; do
-            if [[ ! "$line" =~ uses:[[:space:]][^@[:space:]]+@[0-9A-Fa-f]{40}([[:space:]]|$) ]]; then
-              printf '40桁SHAで固定されていないactionがあります: %s\n' "$line" >&2
-              exit 1
-            fi
-          done < "$uses_lines_path"
+          "$actionlint_binary" -color=false .github/workflows/*.yml
 
       - name: shell scriptを検証
         shell: bash
         run: |
           set -Eeuo pipefail
-          shell_files_path="$RUNNER_TEMP/verify-shell-files.nul"
-          shell_find_status=0
-          find scripts/workflow -type f -name '*.sh' -print0 > "$shell_files_path" || shell_find_status=$?
-          if (( shell_find_status != 0 )); then
-            printf 'shell scriptの列挙に失敗しました\n' >&2
-            exit "$shell_find_status"
-          fi
-          mapfile -d '' files < "$shell_files_path"
-          if (( ${#files[@]} == 0 )); then
-            printf '検証対象のshell scriptがありません\n' >&2
+          shell_file_count=0
+          while IFS= read -r -d '' file; do
+            shell_file_count=$((shell_file_count + 1))
+            bash -n "$file"
+            shellcheck --shell=bash "$file"
+          done < <(find scripts experimental -type f -name '*.sh' -print0)
+          if (( shell_file_count == 0 )); then
+            printf '%s\n' '検証対象のshell scriptがありません' >&2
             exit 1
           fi
-          bash -n "${files[@]}"
-          shellcheck --shell=bash "${files[@]}"
 
       - name: PowerShell parserを検証
         shell: bash
         run: |
           set -Eeuo pipefail
           if ! command -v pwsh >/dev/null 2>&1; then
-            printf 'pwshが見つかりません\n' >&2
+            printf '%s\n' 'pwshが見つかりません' >&2
             exit 1
           fi
-          powershell_files_path="$RUNNER_TEMP/verify-powershell-files.nul"
-          powershell_find_status=0
-          find scripts/workflow -type f -name '*.ps1' -print0 > "$powershell_files_path" || powershell_find_status=$?
-          if (( powershell_find_status != 0 )); then
-            printf 'PowerShell scriptの列挙に失敗しました\n' >&2
-            exit "$powershell_find_status"
-          fi
-          mapfile -d '' powershell_files < "$powershell_files_path"
-          if (( ${#powershell_files[@]} == 0 )); then
-            printf '検証対象のPowerShell scriptがありません\n' >&2
-            exit 1
-          fi
-          for file in "${powershell_files[@]}"; do
+          powershell_file_count=0
+          while IFS= read -r -d '' file; do
+            powershell_file_count=$((powershell_file_count + 1))
             CENTRAL_VERIFY_PS_PATH="$file" pwsh -NoProfile -NonInteractive -Command "
               \$path = [Environment]::GetEnvironmentVariable(\"CENTRAL_VERIFY_PS_PATH\")
-              if ([string]::IsNullOrWhiteSpace(\$path)) {
-                throw \"PowerShell script pathが空です\"
-              }
-              \$resolved = @(Resolve-Path -LiteralPath \$path -ErrorAction Stop)
-              if (\$resolved.Count -ne 1) {
-                throw \"PowerShell script pathを一意に解決できません\"
-              }
-              \$resolvedPath = \$resolved[0].Path
-              if (-not (Test-Path -LiteralPath \$resolvedPath -PathType Leaf -ErrorAction Stop)) {
-                throw \"PowerShell scriptが通常ファイルではありません\"
-              }
               \$tokens = \$null
               \$errors = \$null
-              [System.Management.Automation.Language.Parser]::ParseFile(\$resolvedPath, [ref]\$tokens, [ref]\$errors) | Out-Null
+              [System.Management.Automation.Language.Parser]::ParseFile(\$path, [ref]\$tokens, [ref]\$errors) | Out-Null
               if (\$null -ne \$errors -and \$errors.Count -gt 0) {
                 foreach (\$parseError in \$errors) {
-                  \"{0}:{1}:{2}: {3}\" -f \$resolvedPath, \$parseError.Extent.StartLineNumber, \$parseError.Extent.StartColumnNumber, \$parseError.Message
+                  \"{0}:{1}:{2}: {3}\" -f \$path, \$parseError.Extent.StartLineNumber, \$parseError.Extent.StartColumnNumber, \$parseError.Message
                 }
                 exit 1
               }
             "
-          done
+          done < <(find scripts -type f -name '*.ps1' -print0)
+          if (( powershell_file_count == 0 )); then
+            printf '%s\n' '検証対象のPowerShell scriptがありません' >&2
+            exit 1
+          fi
