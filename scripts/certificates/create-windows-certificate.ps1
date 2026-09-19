@@ -201,12 +201,6 @@ try {
                 }
             }
         }
-    } elseif (-not [string]::IsNullOrEmpty($createdCertificateThumbprint)) {
-        try {
-            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$createdCertificateThumbprint" -Force -ErrorAction Stop
-        } catch {
-            [void]$cleanupExceptions.Add($_.Exception)
-        }
     } elseif ($certificateCreationStarted) {
         [void]$cleanupExceptions.Add([System.InvalidOperationException]::new('生成した証明書をCurrentUserストアから削除するための証明書objectとthumbprintがありません。'))
     }
