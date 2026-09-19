@@ -5,6 +5,16 @@ import { parse as parseYaml } from "yaml";
 import { parseSemVer, parseUpdateMetadata, type UpdateMetadata } from "./schema.js";
 import { assertNoSymlinkPath } from "./path-safety.js";
 
+type AssetContent = {
+  length: number;
+  sha512: string;
+};
+type AssetInfo = {
+  name: string;
+  size: number;
+  content: AssetContent | undefined;
+};
+
 function assertAssetsDirectory(path: string): void {
   assertNoSymlinkPath(path, "assets directoryにsymlinkを指定できません");
   let information;
@@ -41,6 +51,16 @@ function readAsset(path: string, name: string): Buffer {
   }
 }
 
+function readAssetContent(assetsDirectory: string, asset: AssetInfo): AssetContent {
+  if (asset.content != undefined) {
+    return asset.content;
+  }
+  const contents = readAsset(join(assetsDirectory, asset.name), asset.name);
+  const content = { length: contents.length, sha512: sha512(contents) };
+  asset.content = content;
+  return content;
+}
+
 function sha512(contents: Buffer): string {
   return createHash("sha512").update(contents).digest("base64");
 }
@@ -73,9 +93,7 @@ function assertMetadataFile(
   metadataName: string,
   metadata: UpdateMetadata,
   expectedVersion: string,
-  assetNames: Set<string>,
-  assetSizes: Map<string, number>,
-  actualNames: Map<string, string>,
+  assets: Map<string, AssetInfo>,
   assetsDirectory: string
 ): void {
   if (metadata.version !== expectedVersion) {
@@ -86,22 +104,15 @@ function assertMetadataFile(
     throw new Error(`metadata pathの形式が不正です: ${metadata.path}`);
   }
   const metadataPathKey = metadata.path.toLowerCase();
-  if (!assetNames.has(metadataPathKey)) {
+  const metadataPathAsset = assets.get(metadataPathKey);
+  if (metadataPathAsset == undefined) {
     throw new Error(`metadata pathがassets directoryにありません: ${metadata.path}`);
   }
-  const metadataPathSize = assetSizes.get(metadataPathKey);
-  if (metadataPathSize == undefined) {
-    throw new Error(`metadata pathのasset sizeを確認できません: ${metadata.path}`);
-  }
-  const actualPathName = actualNames.get(metadataPathKey);
-  if (actualPathName == undefined) {
-    throw new Error(`metadata pathの実file名を確認できません: ${metadata.path}`);
-  }
-  if (metadata.path !== actualPathName) {
+  if (metadata.path !== metadataPathAsset.name) {
     throw new Error(`metadata pathのbasenameが実fileと一致しません: ${metadata.path}`);
   }
-  const pathContents = readAsset(join(assetsDirectory, actualPathName), metadata.path);
-  if (!equalSha512(sha512(pathContents), metadata.sha512)) {
+  const pathContent = readAssetContent(assetsDirectory, metadataPathAsset);
+  if (!equalSha512(pathContent.sha512, metadata.sha512)) {
     throw new Error(`metadata top-level sha512が実assetと一致しません: ${metadata.path}`);
   }
   if (!metadata.files.some((file) => file.url === metadata.path)) {
@@ -114,21 +125,18 @@ function assertMetadataFile(
       throw new Error(`metadata filesのurlが重複しています: ${file.url}`);
     }
     fileNames.add(key);
-    if (!assetNames.has(key)) {
+    const fileAsset = assets.get(key);
+    if (fileAsset == undefined) {
       throw new Error(`metadata filesのurlがassets directoryにありません: ${file.url}`);
     }
-    const actualFileName = actualNames.get(key);
-    if (actualFileName == undefined) {
-      throw new Error(`metadata filesの実file名を確認できません: ${file.url}`);
-    }
-    if (file.url !== actualFileName) {
+    if (file.url !== fileAsset.name) {
       throw new Error(`metadata filesのbasenameが実fileと一致しません: ${file.url}`);
     }
-    const contents = readAsset(join(assetsDirectory, actualFileName), file.url);
-    if (contents.length !== file.size) {
+    const fileContent = readAssetContent(assetsDirectory, fileAsset);
+    if (fileContent.length !== file.size) {
       throw new Error(`metadata filesのsizeが実assetと一致しません: ${file.url}`);
     }
-    if (!equalSha512(sha512(contents), file.sha512)) {
+    if (!equalSha512(fileContent.sha512, file.sha512)) {
       throw new Error(`metadata filesのsha512が実assetと一致しません: ${file.url}`);
     }
     if (metadataKind === ".exe" && file.url === metadata.path && file.blockMapSize == undefined) {
@@ -136,15 +144,14 @@ function assertMetadataFile(
     }
     if (file.blockMapSize != undefined) {
       const blockMapName = `${file.url}.blockmap`;
-      const actualBlockMapName = actualNames.get(blockMapName.toLowerCase());
-      if (actualBlockMapName == undefined) {
+      const blockMapAsset = assets.get(blockMapName.toLowerCase());
+      if (blockMapAsset == undefined) {
         throw new Error(`metadata blockmapがassets directoryにありません: ${blockMapName}`);
       }
-      if (actualBlockMapName !== blockMapName) {
+      if (blockMapAsset.name !== blockMapName) {
         throw new Error(`metadata blockmapのbasenameが実fileと一致しません: ${blockMapName}`);
       }
-      const blockMapSize = assetSizes.get(blockMapName.toLowerCase());
-      if (blockMapSize == undefined || blockMapSize !== file.blockMapSize) {
+      if (blockMapAsset.size !== file.blockMapSize) {
         throw new Error(`metadata blockMapSizeが実fileと一致しません: ${file.url}`);
       }
     }
@@ -156,7 +163,7 @@ function assertMetadataFile(
       throw new Error(`Windows metadataが通常NSIS以外を参照しています: ${file.url}`);
     }
   }
-  if (pathContents.length !== metadataPathSize) {
+  if (pathContent.length !== metadataPathAsset.size) {
     throw new Error(`metadata pathのsizeを確認できません: ${metadata.path}`);
   }
 }
@@ -166,9 +173,7 @@ export function validateReleaseAssets(assetsDirectory: string, expectedVersion: 
   const parsedExpectedVersion = parseSemVer(expectedVersion);
   assertAssetsDirectory(assetsDirectory);
   const entries = readdirSync(assetsDirectory, { withFileTypes: true });
-  const names = new Set<string>();
-  const actualNames = new Map<string, string>();
-  const sizes = new Map<string, number>();
+  const assets = new Map<string, AssetInfo>();
   const metadata: Array<{ name: string; path: string }> = [];
   for (const entry of entries) {
     if (!entry.isFile() || entry.isSymbolicLink()) {
@@ -186,14 +191,12 @@ export function validateReleaseAssets(assetsDirectory: string, expectedVersion: 
       throw new Error(`asset basenameに制御文字を指定できません: ${entry.name}`);
     }
     const key = entry.name.toLowerCase();
-    if (names.has(key)) {
+    if (assets.has(key)) {
       throw new Error(`asset basenameが大文字小文字を無視して重複しています: ${entry.name}`);
     }
-    names.add(key);
-    actualNames.set(key, entry.name);
     const path = join(assetsDirectory, entry.name);
     const size = assertRegularAsset(path, entry.name);
-    sizes.set(key, size);
+    assets.set(key, { name: entry.name, size, content: undefined });
     const extension = extname(entry.name).toLowerCase();
     if (extension === ".yml" || extension === ".yaml") {
       metadata.push({ name: entry.name, path });
@@ -201,14 +204,6 @@ export function validateReleaseAssets(assetsDirectory: string, expectedVersion: 
   }
   for (const item of metadata) {
     const parsed = parseMetadata(item.path, item.name);
-    assertMetadataFile(
-      item.name,
-      parsed,
-      parsedExpectedVersion,
-      names,
-      sizes,
-      actualNames,
-      assetsDirectory
-    );
+    assertMetadataFile(item.name, parsed, parsedExpectedVersion, assets, assetsDirectory);
   }
 }
