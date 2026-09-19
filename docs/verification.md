@@ -5,7 +5,7 @@
 
 ## 静的検査と GitHub Actions
 
-[verify ワークフロー](../.github/workflows/verify.yml)で format、lint、型、workflow、shell script、PowerShell script の構文を検査します。
+[verify ワークフロー](../.github/workflows/verify.yml)で format、lint、型、workflow、shell script、PowerShell script の構文を検査します。Windows runnerではPowerShell scriptの実経路と、NSIS Webの実命名を使うfixtureも検査します。
 静的検査の成功だけでは、OS の署名処理や GitHub Release への公開の成功を確認したことにはなりません。
 
 実際の App と Secrets を使う確認は、検証用アプリと検証用 Release で行います。
@@ -16,8 +16,8 @@
 | ソース固定 | macOS と Windows が同じ source SHA を checkout し、公開前に tag が移動していれば停止する |
 | ビルド | source で frozen install、build、electron-builder が成功し、source の設定と hook が成果物へ反映される |
 | macOS 署名 | electron-builder の署名が成功し、ZIP、blockmap、更新 metadata が生成される |
-| Windows 署名 | electron-builder の署名が成功し、通常 NSIS、blockmap、channel に対応する root metadata、NSIS Web installer、`.nsis.7z` package が生成される |
-| 成果物選択 | 余分な builder 出力を公開せず、必須 asset が一意に選ばれる |
+| Windows 署名 | electron-builder の署名が成功し、通常 NSIS、blockmap、channel に対応する root metadata、NSIS Web metadataに対応する installer、`.nsis.7z` package が生成される |
+| 成果物選択 | metadataの参照名から下位directoryを含む成果物を一意に選び、余分な builder 出力を公開しない |
 | 更新 metadata | 実ファイルの参照、サイズ、Base64 の SHA-512、blockmap size、version が一致する |
 | 公開先 | 既存かつ変更可能な Release だけを変更し、Release の本文などを編集しない |
 | 上書き公開 | 同名ファイルを置換し、配布ファイルと blockmap の後に更新 metadata を公開する |

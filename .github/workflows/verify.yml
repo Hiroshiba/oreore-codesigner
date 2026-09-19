@@ -98,3 +98,42 @@ jobs:
             printf '%s\n' '検証対象のPowerShell scriptがありません' >&2
             exit 1
           fi
+
+  verify-windows:
+    runs-on: windows-2022
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.14.0
+
+      - name: 中央setup
+        shell: bash
+        run: bash scripts/workflow/setup-central.sh
+
+      - name: Windows workflow testを検証
+        shell: pwsh
+        run: pnpm exec tsx --test tests/windows-workflow.test.ts
+
+      - name: PowerShell parserを検証
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -LiteralPath scripts -File -Filter '*.ps1' -Recurse -ErrorAction Stop)
+          if ($files.Count -eq 0) {
+            throw '検証対象のPowerShell scriptがありません'
+          }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($null -ne $errors -and $errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                throw ('{0}:{1}:{2}: {3}' -f $file.FullName, $parseError.Extent.StartLineNumber, $parseError.Extent.StartColumnNumber, $parseError.Message)
+              }
+            }
+          }

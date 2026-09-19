@@ -91,6 +91,8 @@ try {
       "--config.directories.output=$builderOutput" `
       --config.forceCodeSigning=true `
       --config.win.forceCodeSigning=true `
+      --config.generateUpdatesFilesForAllChannels=false `
+      --config.win.generateUpdatesFilesForAllChannels=false `
       --config.publish.provider=generic `
       "--config.publish.url=$publishUrl" `
       --config.win.publish.provider=generic `
@@ -105,36 +107,97 @@ try {
     Pop-Location
   }
 
-  $normalInstallers = @(Get-ChildItem -LiteralPath $builderOutput -File -Force -ErrorAction Stop | Where-Object {
-      $_.Extension -ieq '.exe' -and (Test-Path -LiteralPath ($_.FullName + '.blockmap') -PathType Leaf)
-    })
-  $normalBlockmaps = @(Get-ChildItem -LiteralPath $builderOutput -File -Force -ErrorAction Stop | Where-Object {
-      $_.Extension -ieq '.blockmap' -and (Test-Path -LiteralPath ($_.FullName -replace '\.blockmap$', '') -PathType Leaf)
-    })
+  function Test-UpdateMetadata([System.IO.FileInfo]$MetadataFile, [bool]$Web) {
+    $content = Get-Content -LiteralPath $MetadataFile.FullName -Raw -ErrorAction Stop
+    if ($content -notmatch '(?m)^version:[ \t]+[^\r\n]+$' -or
+      $content -notmatch '(?m)^files:[ \t]*$' -or
+      $content -notmatch '(?m)^path:[ \t]+[^\r\n]+$' -or
+      $content -notmatch '(?m)^sha512:[ \t]+[A-Za-z0-9+/=]+$') {
+      return $false
+    }
+    if ($Web -and ($content -notmatch '(?m)^packages:[ \t]*$' -or
+        $content -notmatch '(?m)^[ \t]+file:[ \t]+[^\r\n]+$')) {
+      return $false
+    }
+    return $true
+  }
+
+  function Convert-YamlScalar([string]$Value) {
+    $scalar = $Value.Trim()
+    if (($scalar.StartsWith('"') -and $scalar.EndsWith('"')) -or
+      ($scalar.StartsWith("'") -and $scalar.EndsWith("'"))) {
+      return $scalar.Substring(1, $scalar.Length - 2)
+    }
+    return $scalar
+  }
+
+  function Get-MetadataValue([System.IO.FileInfo]$MetadataFile, [string]$Key) {
+    $content = Get-Content -LiteralPath $MetadataFile.FullName -Raw -ErrorAction Stop
+    $pattern = '(?m)^' + [regex]::Escape($Key) + ':[ \t]*([^\r\n]+)$'
+    $matches = @([regex]::Matches($content, $pattern))
+    if ($matches.Count -ne 1) {
+      throw "metadataの$Keyが一意ではありません: $($MetadataFile.Name)"
+    }
+    return Convert-YamlScalar $matches[0].Groups[1].Value
+  }
+
+  function Find-Artifact([string]$Root, [string]$Name) {
+    $matches = @(Get-ChildItem -LiteralPath $Root -File -Recurse -Force -ErrorAction Stop | Where-Object {
+        $_.Name -ieq $Name -and ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0
+      })
+    if ($matches.Count -ne 1) {
+      throw "metadataが参照するassetの一意な実fileがありません: $Name"
+    }
+    return $matches[0]
+  }
+
   $metadataFiles = @(Get-ChildItem -LiteralPath $builderOutput -File -Force -ErrorAction Stop | Where-Object {
-      $_.Extension -ieq '.yml' -and $_.Name -notmatch '(?i)-mac\.yml$'
+      $_.Extension -ieq '.yml' -and $_.Name -notmatch '(?i)-mac\.yml$' -and $_.Name -ine 'builder-debug.yml' -and (Test-UpdateMetadata $_ $false)
     })
+  if ($metadataFiles.Count -ne 1) {
+    throw 'Windows packageの通常NSIS metadataが一意ではありません'
+  }
+  $normalMetadata = $metadataFiles[0]
+  $normalName = Get-MetadataValue $normalMetadata 'path'
+  if ([string]::IsNullOrEmpty($normalName) -or $normalName.Contains('/') -or $normalName.Contains('\')) {
+    throw '通常NSIS metadataのpathはbasenameでなければなりません'
+  }
+  $normalInstaller = Find-Artifact $builderOutput $normalName
+  $normalBlockmap = Find-Artifact $builderOutput ($normalName + '.blockmap')
   $webDirectory = Join-Path $builderOutput 'nsis-web'
   Assert-Directory $webDirectory 'NSIS Web output directoryがありません' | Out-Null
-  $webInstallers = @(Get-ChildItem -LiteralPath $webDirectory -File -Force -ErrorAction Stop | Where-Object {
-      $_.Extension -ieq '.exe'
+  $webMetadataFiles = @(Get-ChildItem -LiteralPath $webDirectory -File -Force -ErrorAction Stop | Where-Object {
+      $_.Extension -ieq '.yml' -and (Test-UpdateMetadata $_ $true)
     })
-  $webPackages = @(Get-ChildItem -LiteralPath $webDirectory -File -Force -ErrorAction Stop | Where-Object {
-      $_.Name -match '(?i)\.nsis\.7z$'
-  })
-  if ($normalInstallers.Count -ne 1 -or $normalBlockmaps.Count -ne 1 -or $metadataFiles.Count -ne 1 -or $webInstallers.Count -ne 1 -or $webPackages.Count -ne 1) {
-    throw 'Windows packageの通常NSIS、blockmap、metadata、NSIS Web、.nsis.7zが揃っていません'
+  if ($webMetadataFiles.Count -ne 1) {
+    throw 'NSIS Web metadataが一意ではありません'
   }
+  $webMetadata = $webMetadataFiles[0]
+  $webInstallerName = Get-MetadataValue $webMetadata 'path'
+  if ([string]::IsNullOrEmpty($webInstallerName) -or $webInstallerName.Contains('/') -or $webInstallerName.Contains('\')) {
+    throw 'NSIS Web metadataのpathはbasenameでなければなりません'
+  }
+  $webMetadataContent = Get-Content -LiteralPath $webMetadata.FullName -Raw -ErrorAction Stop
+  $webPackageMatches = @([regex]::Matches($webMetadataContent, '(?m)^[ \t]+file:[ \t]*([^\r\n]+)$'))
+  if ($webPackageMatches.Count -ne 1) {
+    throw 'NSIS Web metadataのpackageが一意ではありません'
+  }
+  $webPackageName = Convert-YamlScalar $webPackageMatches[0].Groups[1].Value
+  if ([string]::IsNullOrEmpty($webPackageName) -or $webPackageName.Contains('/') -or $webPackageName.Contains('\')) {
+    throw 'NSIS Web metadataのpackage pathはbasenameでなければなりません'
+  }
+  $webInstaller = Find-Artifact $webDirectory $webInstallerName
+  $webPackage = Find-Artifact $webDirectory $webPackageName
 
   $payloadDirectory = Join-Path $releaseItem.FullName 'payload'
   $metadataDirectory = Join-Path $releaseItem.FullName 'metadata'
   New-Item -ItemType Directory -Path $payloadDirectory -ErrorAction Stop | Out-Null
   New-Item -ItemType Directory -Path $metadataDirectory -ErrorAction Stop | Out-Null
-  Copy-Item -LiteralPath $normalInstallers[0].FullName -Destination (Join-Path $payloadDirectory $normalInstallers[0].Name) -ErrorAction Stop
-  Copy-Item -LiteralPath $normalBlockmaps[0].FullName -Destination (Join-Path $payloadDirectory $normalBlockmaps[0].Name) -ErrorAction Stop
-  Copy-Item -LiteralPath $webInstallers[0].FullName -Destination (Join-Path $payloadDirectory $webInstallers[0].Name) -ErrorAction Stop
-  Copy-Item -LiteralPath $webPackages[0].FullName -Destination (Join-Path $payloadDirectory $webPackages[0].Name) -ErrorAction Stop
-  Copy-Item -LiteralPath $metadataFiles[0].FullName -Destination (Join-Path $metadataDirectory $metadataFiles[0].Name) -ErrorAction Stop
+  Copy-Item -LiteralPath $normalInstaller.FullName -Destination (Join-Path $payloadDirectory $normalName) -ErrorAction Stop
+  Copy-Item -LiteralPath $normalBlockmap.FullName -Destination (Join-Path $payloadDirectory ($normalName + '.blockmap')) -ErrorAction Stop
+  Copy-Item -LiteralPath $webInstaller.FullName -Destination (Join-Path $payloadDirectory $webInstallerName) -ErrorAction Stop
+  Copy-Item -LiteralPath $webPackage.FullName -Destination (Join-Path $payloadDirectory $webPackageName) -ErrorAction Stop
+  Copy-Item -LiteralPath $normalMetadata.FullName -Destination (Join-Path $metadataDirectory $normalMetadata.Name) -ErrorAction Stop
 } catch {
   $operationException = $_.Exception
 } finally {

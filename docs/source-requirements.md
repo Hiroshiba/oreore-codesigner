@@ -30,7 +30,8 @@ electron-builder --mac zip --x64 --publish never
 electron-builder --win nsis nsis-web --x64 --publish never
 ```
 
-中央は出力先、root と platform の `forceCodeSigning`、root と platform・target の generic publish URL だけを CLI で上書きします。
+中央は出力先、root と platform の `forceCodeSigning`、更新 metadataを現在のchannelだけにする設定、root と platform・target の generic publish URL だけを CLI で上書きします。
+macOSのZIP targetには `zip.publish` も指定するため、source側のtarget publishより中央の公開先が優先されます。
 NSIS Web の `appPackageUrl` は中央の target publish 設定から package 名を補うため `null` に上書きします。
 `asar`、`asarUnpack`、`extraResources`、アプリ固有の hook、appId、version、productName、GUID、publisher、icon、entitlements、artifactName、NSIS 設定はソース側の builder が直接反映します。
 ビルド時点で署名用秘密鍵や公開用 token をアプリへ埋め込まないでください。
@@ -43,8 +44,9 @@ macOS のジョブは environment secret の P12 を `CSC_LINK`、パスワー�
 Windows のジョブは PFX とパスワードを `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` として electron-builder へ渡します。
 署名 hash、publisher、GUID、NSIS 設定はソース側の設定を使います。
 
-macOS は ZIP、blockmap、channel に対応する `*-mac.yml` の更新 metadata を、Windows は通常 NSIS の installer、blockmap、channel に対応する root の `.yml` と NSIS Web の installer、`.nsis.7z` package を生成できなければなりません。
+macOS は ZIP、blockmap、channel に対応する `*-mac.yml` の更新 metadata を、Windows は通常 NSIS の installer、blockmap、channel に対応する root の `.yml` と、NSIS Web metadataを基準に選ぶ installer、`.nsis.7z` package を生成できなければなりません。
 通常 NSIS の更新 metadata は通常 installer を参照します。
+余分なbuilder出力は無視し、artifactNameが下位directoryを含む場合はmetadata参照名から再帰的に一意な実fileを選んでRelease assetのbasenameへ集約します。
 
 ## アプリ内更新
 

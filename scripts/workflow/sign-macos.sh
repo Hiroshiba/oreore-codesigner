@@ -47,7 +47,11 @@ if [[ ! -f "$package_json" || -L "$package_json" ]]; then
   printf '%s\n' 'source package.jsonが通常fileではありません' >&2
   exit 1
 fi
-package_manager=$(jq -er '.packageManager | select(type == "string" and length > 0)' "$package_json")
+package_manager=$(jq -er '.packageManager | select(type == "string")' "$package_json")
+if [[ ! "$package_manager" =~ ^pnpm@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[A-Za-z0-9._-]+)?$ ]]; then
+  printf '%s\n' 'source packageManagerが不正です' >&2
+  exit 1
+fi
 
 umask 077
 work_directory=$(mktemp -d "${RUNNER_TEMP:-/tmp}/central-package-macos.XXXXXX")
@@ -104,42 +108,82 @@ mkdir -p -- "$builder_output"
     "--config.directories.output=$builder_output" \
     --config.forceCodeSigning=true \
     --config.mac.forceCodeSigning=true \
+    --config.generateUpdatesFilesForAllChannels=false \
+    --config.mac.generateUpdatesFilesForAllChannels=false \
     --config.publish.provider=generic \
     "--config.publish.url=$publish_url" \
     --config.mac.publish.provider=generic \
-    "--config.mac.publish.url=$publish_url"
+    "--config.mac.publish.url=$publish_url" \
+    --config.zip.publish.provider=generic \
+    "--config.zip.publish.url=$publish_url"
 )
 
+is_update_metadata() {
+  local metadata_path=$1
+  [[ -f "$metadata_path" && ! -L "$metadata_path" ]] || return 1
+  grep -Eq '^version:[[:space:]]+[^[:space:]]+$' "$metadata_path" || return 1
+  grep -Eq '^files:[[:space:]]*$' "$metadata_path" || return 1
+  grep -Eq '^path:[[:space:]]+[^[:space:]]+$' "$metadata_path" || return 1
+  grep -Eq '^sha512:[[:space:]]+[A-Za-z0-9+/=]+$' "$metadata_path"
+}
+
+read_metadata_value() {
+  local key=$1
+  local metadata_path=$2
+  local value
+  value=$(sed -n "s/^$key:[[:space:]]*//p" "$metadata_path" | head -n 1)
+  if [[ -z "$value" ]]; then
+    printf 'metadataの%sがありません: %s\n' "$key" "$metadata_path" >&2
+    return 1
+  fi
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value=${value:1:${#value}-2}
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value=${value:1:${#value}-2}
+  fi
+  printf '%s' "$value"
+}
+
+find_artifact_by_name() {
+  local artifact_name=$1
+  local -a matches=()
+  local candidate
+  while IFS= read -r -d '' candidate; do
+    if [[ -f "$candidate" && ! -L "$candidate" && "$(basename -- "$candidate")" == "$artifact_name" ]]; then
+      matches+=("$candidate")
+    fi
+  done < <(find "$builder_output" -type f -print0)
+  if (( ${#matches[@]} != 1 )); then
+    printf 'metadataが参照するassetの一意な実fileがありません: %s\n' "$artifact_name" >&2
+    return 1
+  fi
+  printf '%s' "${matches[0]}"
+}
+
 shopt -s nullglob
-zip_files=("$builder_output"/*.zip)
-blockmap_files=("$builder_output"/*.blockmap)
 metadata_entries=()
 for metadata_path in "$builder_output"/*-mac.yml; do
-  if [[ -f "$metadata_path" && ! -L "$metadata_path" ]]; then
+  if is_update_metadata "$metadata_path"; then
     metadata_entries+=("$metadata_path")
   fi
 done
 shopt -u nullglob
-zip_entries=()
-blockmap_entries=()
-for zip_path in "${zip_files[@]}"; do
-  if [[ -f "$zip_path.blockmap" ]]; then
-    zip_entries+=("$zip_path")
-  fi
-done
-for blockmap_path in "${blockmap_files[@]}"; do
-  if [[ -f "${blockmap_path%.blockmap}" ]]; then
-    blockmap_entries+=("$blockmap_path")
-  fi
-done
-if (( ${#zip_entries[@]} != 1 || ${#blockmap_entries[@]} != 1 || ${#metadata_entries[@]} != 1 )); then
+if (( ${#metadata_entries[@]} != 1 )); then
   printf '%s\n' 'macOS packageのZIP、blockmap、update metadataが揃っていません' >&2
   exit 1
 fi
+metadata_path=${metadata_entries[0]}
+zip_name=$(read_metadata_value path "$metadata_path")
+if [[ "$zip_name" == */* || "$zip_name" == *\\* || "$zip_name" == '.' || "$zip_name" == '..' ]]; then
+  printf '%s\n' 'macOS metadataのpathはbasenameでなければなりません' >&2
+  exit 1
+fi
+zip_path=$(find_artifact_by_name "$zip_name")
+blockmap_path=$(find_artifact_by_name "$zip_name.blockmap")
 
 payload_directory="$release_output_directory/payload"
 metadata_directory="$release_output_directory/metadata"
 mkdir -p -- "$payload_directory" "$metadata_directory"
-cp -- "${zip_entries[0]}" "$payload_directory/$(basename -- "${zip_entries[0]}")"
-cp -- "${blockmap_entries[0]}" "$payload_directory/$(basename -- "${blockmap_entries[0]}")"
-cp -- "${metadata_entries[0]}" "$metadata_directory/$(basename -- "${metadata_entries[0]}")"
+cp -- "$zip_path" "$payload_directory/$zip_name"
+cp -- "$blockmap_path" "$payload_directory/$zip_name.blockmap"
+cp -- "$metadata_path" "$metadata_directory/$(basename -- "$metadata_path")"

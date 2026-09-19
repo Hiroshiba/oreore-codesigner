@@ -166,14 +166,25 @@ jobs:
             "$TAG" \
             "$RUNNER_TEMP/macos-release"
 
-      - name: source versionを出力
+      - name: 生成metadataのversionを出力
         id: version
         shell: bash
         run: |
           set -Eeuo pipefail
-          version=$(jq -er '.version | select(type == "string" and length > 0)' "$GITHUB_WORKSPACE/source/package.json")
+          shopt -s nullglob
+          metadata_files=("$RUNNER_TEMP/macos-release/metadata"/*.yml)
+          shopt -u nullglob
+          if (( ${#metadata_files[@]} != 1 )); then
+            printf '%s\n' 'macOS生成metadataが一意ではありません' >&2
+            exit 1
+          fi
+          version=$(sed -n 's/^version:[[:space:]]*//p' "${metadata_files[0]}")
           if [[ "$version" == *$'\n'* || "$version" == *$'\r'* ]]; then
-            printf '%s\n' 'source versionに改行を指定できません' >&2
+            printf '%s\n' '生成metadataのversionに改行を指定できません' >&2
+            exit 1
+          fi
+          if [[ -z "$version" ]]; then
+            printf '%s\n' '生成metadataのversionが空です' >&2
             exit 1
           fi
           printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
@@ -245,14 +256,22 @@ jobs:
             -ReleaseOutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-release')
           if ($LASTEXITCODE -ne 0) { throw 'Windows packageに失敗しました' }
 
-      - name: source versionを出力
+      - name: 生成metadataのversionを出力
         id: version
         shell: pwsh
         run: |
-          $packageJson = Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'source/package.json') -Raw -ErrorAction Stop | ConvertFrom-Json
-          $version = [string]$packageJson.version
+          $metadataFiles = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'windows-release/metadata') -File -Filter '*.yml' -ErrorAction Stop)
+          if ($metadataFiles.Count -ne 1) {
+            throw 'Windows生成metadataが一意ではありません'
+          }
+          $metadata = Get-Content -LiteralPath $metadataFiles[0].FullName -Raw -ErrorAction Stop
+          $match = [regex]::Match($metadata, '(?m)^version:[ \t]*([^\r\n]+)$')
+          if (-not $match.Success) {
+            throw '生成metadataのversionがありません'
+          }
+          $version = $match.Groups[1].Value.Trim()
           if ([string]::IsNullOrEmpty($version) -or $version.Contains("`n") -or $version.Contains("`r")) {
-            throw 'source versionが不正です'
+            throw '生成metadataのversionが不正です'
           }
           Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version"
 

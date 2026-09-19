@@ -23,7 +23,8 @@
 
 electron-builder の appId、version、productName、GUID、publisher、icon、entitlements、artifactName、NSIS 設定、hook はソース側の設定を正本として直接使います。
 中央は対象ソースの設定を再構築せず、ソース側の electron-builder 設定を直接読み込ませます。
-`electron-builder` の CLI には OS、x64、出力先、root と platform の署名強制、root と platform・target の対象 Release 用 generic publish URL だけを上書きします。
+`electron-builder` の CLI には OS、x64、出力先、root と platform の署名強制、更新 metadata を現在の channel だけにする設定、root と platform・target の対象 Release 用 generic publish URL だけを上書きします。
+macOS の ZIP target には `zip.publish` も指定し、source 側の target 設定より中央の対象 Release を優先します。
 NSIS Web の `appPackageUrl` は中央の target publish URLから実際の package 名を補わせるため `null` にします。
 
 macOS は electron-builder に `CSC_LINK`、`CSC_KEY_PASSWORD` と必要な `CSC_NAME` を渡し、一時 keychain の作成と削除を任せます。
@@ -33,9 +34,11 @@ Windows は `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` だけを使い、中央で 
 ## 成果物と公開
 
 macOS は ZIP、blockmap、channel に対応する root の `*-mac.yml` 更新 metadata を生成します。
-Windows は通常 NSIS の installer、blockmap、channel に対応する root の更新 metadata と、`nsis-web` 配下の installer、`.nsis.7z` package を生成します。
+Windows は通常 NSIS の installer、blockmap、channel に対応する root の更新 metadata と、`nsis-web` 配下の metadata を基準に選ぶ installer、`.nsis.7z` package を生成します。
 通常 NSIS の metadata は通常 installer を参照し、NSIS Web の成果物は初回導入に使います。
-builder の余分な出力は公開対象へ選びません。
+builder の余分な出力は公開対象へ選びません。artifactName が出力先の下位 directoryを含む場合も、metadata の参照名を使って再帰的に一意な実 file を選び、Release assetのbasenameへ集約します。
+
+package jobのversionはsource package.jsonではなく、electron-builderが生成した各OSの更新 metadataから取得します。両OSの生成 metadataが同じversionであることをpublish前に確認します。
 
 公開前に両 OS の version、asset の一意性、metadata が参照する実ファイルの存在、サイズ、Base64 の SHA-512、blockmap size を検証します。
 既存かつ変更可能な Release だけを対象にし、配布ファイルと blockmap を先に、更新 metadata を最後に `gh release upload --clobber` で公開します。
