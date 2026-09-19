@@ -1,12 +1,9 @@
 ﻿param(
-  [Parameter(Mandatory = $true)][string]$CentralRoot,
-  [Parameter(Mandatory = $true)][string]$ContractPath,
-  [Parameter(Mandatory = $true)][string]$SourceManifestPath,
   [Parameter(Mandatory = $true)][string]$UnsignedArchive,
-  [Parameter(Mandatory = $true)][string]$AssetsDirectory,
-  [Parameter(Mandatory = $true)][string]$AssetsArchive,
-  [Parameter(Mandatory = $true)][string]$NormalProject,
-  [Parameter(Mandatory = $true)][string]$WebProject
+  [Parameter(Mandatory = $true)][string]$PackageInputDirectory,
+  [Parameter(Mandatory = $true)][string]$Repository,
+  [Parameter(Mandatory = $true)][string]$Tag,
+  [Parameter(Mandatory = $true)][string]$ReleaseOutputDirectory
 )
 
 Set-StrictMode -Version Latest
@@ -18,15 +15,43 @@ function Assert-ExternalSuccess([string]$Message) {
   }
 }
 
-function Invoke-SafeExtract([string]$Archive, [string]$Output, [string]$Central) {
+function Assert-RegularFile([string]$Path, [string]$Message) {
+  $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+  if ($item -isnot [System.IO.FileInfo] -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw $Message
+  }
+  return $item
+}
+
+function Assert-Directory([string]$Path, [string]$Message) {
+  $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+  if ($item -isnot [System.IO.DirectoryInfo] -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw $Message
+  }
+  return $item
+}
+
+function Assert-EmptyDirectory([string]$Path, [string]$Message) {
+  if (Test-Path -LiteralPath $Path) {
+    Assert-Directory $Path $Message | Out-Null
+    if (@(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop).Count -ne 0) {
+      throw $Message
+    }
+    return
+  }
+  New-Item -ItemType Directory -Path $Path -ErrorAction Stop | Out-Null
+  Assert-Directory $Path $Message | Out-Null
+}
+
+function Invoke-SafeExtract([string]$Archive, [string]$Output, [string]$CentralRoot) {
   $python = Get-Command python.exe -ErrorAction Stop
   $pythonVersion = (& $python.Source --version 2>&1 | Out-String).Trim()
   $pythonExitCode = $LASTEXITCODE
   if ($pythonExitCode -ne 0 -or $pythonVersion -notmatch '^Python 3\.(9|[1-9][0-9])\.[0-9]+$') {
     throw 'Python 3.9以上が必要です'
   }
-  $extractor = Join-Path $Central 'scripts/workflow/safe-extract.py'
-  Assert-RegularFile $extractor 'safe extractorがありません'
+  $extractor = Join-Path $CentralRoot 'scripts/workflow/safe-extract.py'
+  Assert-RegularFile $extractor 'safe extractorがありません' | Out-Null
   & $python.Source $extractor --archive $Archive --output $Output --platform windows
   Assert-ExternalSuccess 'unsigned Windows archiveの展開に失敗しました'
 }
@@ -74,116 +99,45 @@ function Find-SignTool {
   return [string]$selected[0].Path
 }
 
-function Assert-AuthenticodeSigner([string]$SignTool, [string]$Path, [string]$ExpectedSha1, [string]$ExpectedSha256, [string]$ExpectedPublisher) {
-  & $SignTool verify /pa /all /q $Path
-  Assert-ExternalSuccess "Authenticode署名検証に失敗しました: $Path"
-  $signature = Get-AuthenticodeSignature -LiteralPath $Path
-  if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or $null -eq $signature.SignerCertificate) {
-    throw "Authenticode署名が有効ではありません: $Path"
-  }
-  $certificate = $signature.SignerCertificate
-  $actualSha1 = $certificate.Thumbprint.Replace(' ', '').ToUpperInvariant()
-  $actualSha256 = $certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant()
-  $actualPublisher = $certificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
-  if ($actualSha1 -cne $ExpectedSha1 -or $actualSha256 -cne $ExpectedSha256 -or $actualPublisher -cne $ExpectedPublisher) {
-    throw "Authenticode signerが設定と一致しません: $Path"
-  }
-}
-
-function Test-PortableExecutable([System.IO.FileInfo]$File) {
-  if ($File.Length -lt 64) {
-    return $false
-  }
-  $stream = $null
-  $reader = $null
-  try {
-    $stream = [System.IO.File]::Open($File.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-    $reader = [System.IO.BinaryReader]::new($stream)
-    if ($reader.ReadUInt16() -ne 0x5a4d) {
-      return $false
-    }
-    $stream.Position = 0x3c
-    $peOffset = $reader.ReadInt32()
-    if ($peOffset -lt 64 -or $peOffset -gt $File.Length - 4) {
-      return $false
-    }
-    $stream.Position = $peOffset
-    $signature = $reader.ReadBytes(4)
-    return $signature.Length -eq 4 -and $signature[0] -eq 0x50 -and $signature[1] -eq 0x45 -and $signature[2] -eq 0 -and $signature[3] -eq 0
-  } finally {
-    if ($null -ne $reader) { $reader.Dispose() }
-    elseif ($null -ne $stream) { $stream.Dispose() }
-  }
-}
-
-function Get-PortableExecutables([string]$Root) {
-  $files = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force)
-  $portableExecutables = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
-  foreach ($file in $files) {
-    if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-      throw "Windows payloadにreparse pointがあります: $($file.FullName)"
-    }
-    if (Test-PortableExecutable $file) {
-      [void]$portableExecutables.Add($file)
-    }
-  }
-  return @($portableExecutables)
-}
-
-function Assert-RegularFile([string]$Path, [string]$Message) {
-  $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-  if ($item -isnot [System.IO.FileInfo] -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-    throw $Message
-  }
-}
-
-function Assert-EmptyDirectory([string]$Path) {
-  if (Test-Path -LiteralPath $Path) {
-    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-    if ($item -isnot [System.IO.DirectoryInfo] -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-      throw "出力先が通常directoryではありません: $Path"
-    }
-    if (@(Get-ChildItem -LiteralPath $Path -Force).Count -ne 0) {
-      throw "出力先は空でなければなりません: $Path"
-    }
-  } else {
-    New-Item -ItemType Directory -Path $Path -ErrorAction Stop | Out-Null
-  }
-}
-
-function Assert-ProjectOutputPath([string]$Path) {
-  if (Test-Path -LiteralPath $Path) {
-    throw "package projectのoutputは生成開始時に存在してはいけません: $Path"
-  }
-  $parent = Split-Path -LiteralPath $Path -Parent
-  if ([string]::IsNullOrEmpty($parent)) {
-    $parent = (Get-Location).Path
-  }
-  if (Test-Path -LiteralPath $parent) {
-    $parentItem = Get-Item -LiteralPath $parent -Force -ErrorAction Stop
-    if ($parentItem -isnot [System.IO.DirectoryInfo] -or ($parentItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-      throw "package projectの親pathが通常directoryではありません: $parent"
-    }
-  } else {
-    New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null
-  }
-}
-
-function Get-CentralPath([string]$RelativePath) {
+function Get-CentralPath([string]$CentralRoot, [string]$RelativePath) {
   if ($RelativePath -notmatch '^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$') {
     throw "中央repo内のpathが不正です: $RelativePath"
   }
-  $centralFull = [System.IO.Path]::GetFullPath($CentralRoot)
+  $centralFullPath = [System.IO.Path]::GetFullPath($CentralRoot)
   $candidate = [System.IO.Path]::GetFullPath((Join-Path $CentralRoot ($RelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
-  $prefix = $centralFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-  if (-not $candidate.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+  $prefix = $centralFullPath.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+  if (-not $candidate.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "中央repo外のpathです: $RelativePath"
   }
   return $candidate
 }
 
+function Assert-CodeSigningCertificate(
+  [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+  [string]$Fingerprint,
+  [string]$CommonName,
+  [string]$Label
+) {
+  $actualFingerprint = $Certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant()
+  if ($actualFingerprint -cne $Fingerprint) {
+    throw "${Label}のSHA-256 fingerprintが一致しません"
+  }
+  $actualCommonName = $Certificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+  if ($actualCommonName -cne $CommonName) {
+    throw "${Label}のCNが一致しません"
+  }
+  $ekuExtension = @($Certificate.Extensions | Where-Object { $_.Oid.Value -ceq '2.5.29.37' }) | Select-Object -First 1
+  if ($null -eq $ekuExtension) {
+    throw "${Label}にCode Signing EKUがありません"
+  }
+  $enhancedKeyUsage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($ekuExtension, $false)
+  if (@($enhancedKeyUsage.EnhancedKeyUsages | Where-Object { $_.Value -ceq '1.3.6.1.5.5.7.3.3' }).Count -eq 0) {
+    throw "${Label}にCode Signing EKUがありません"
+  }
+}
+
 function New-Store([string]$Name) {
-  $store = New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Store -ArgumentList @(
+  $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
     $Name,
     [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
   )
@@ -196,7 +150,9 @@ function Add-TrustCertificate(
   [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
   [string]$Fingerprint
 ) {
-  $matches = @($Store.Certificates | Where-Object { $_.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() -ceq $Fingerprint })
+  $matches = @($Store.Certificates | Where-Object {
+      $_.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() -ceq $Fingerprint
+    })
   if ($matches.Count -eq 0) {
     $Store.Add($Certificate)
     return $true
@@ -211,8 +167,66 @@ function Remove-AddedCertificate(
   $Store.Remove($Certificate)
 }
 
-function Invoke-Builder([string]$Project, [string]$Prepackaged, [string]$Central) {
-  Push-Location $Central
+function Get-SignableFiles([string]$Root) {
+  $signableExtensions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($extension in @('.exe', '.dll', '.node')) {
+    [void]$signableExtensions.Add($extension)
+  }
+  $files = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction Stop)
+  $signableFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+  foreach ($file in $files) {
+    if ($file -isnot [System.IO.FileInfo]) {
+      throw "Windows payloadに通常file以外があります: $($file.FullName)"
+    }
+    if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "Windows payloadにreparse pointがあります: $($file.FullName)"
+    }
+    if ($signableExtensions.Contains($file.Extension)) {
+      [void]$signableFiles.Add($file)
+    }
+  }
+  $directories = @(Get-ChildItem -LiteralPath $Root -Recurse -Directory -Force -ErrorAction Stop)
+  foreach ($directory in $directories) {
+    if (($directory.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "Windows payloadにreparse pointがあります: $($directory.FullName)"
+    }
+  }
+  return @($signableFiles)
+}
+
+function Invoke-SignTool(
+  [string]$SignTool,
+  [string]$Path,
+  [string]$PfxPath,
+  [string]$Password,
+  [string]$TimestampUrl
+) {
+  & $SignTool sign /fd SHA256 /f $PfxPath /p $Password /tr $TimestampUrl /td SHA256 $Path
+  Assert-ExternalSuccess "Windows code署名に失敗しました: $Path"
+}
+
+function Assert-AuthenticodeSigner(
+  [string]$SignTool,
+  [string]$Path,
+  [string]$ExpectedFingerprint,
+  [string]$ExpectedPublisher
+) {
+  & $SignTool verify /pa /all /q $Path
+  Assert-ExternalSuccess "Authenticode署名検証に失敗しました: $Path"
+  $signature = Get-AuthenticodeSignature -LiteralPath $Path
+  if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or $null -eq $signature.SignerCertificate) {
+    throw "Authenticode署名が有効ではありません: $Path"
+  }
+  $certificate = $signature.SignerCertificate
+  $actualFingerprint = $certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant()
+  $actualPublisher = $certificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+  if ($actualFingerprint -cne $ExpectedFingerprint -or $actualPublisher -cne $ExpectedPublisher) {
+    throw "Authenticode signerが設定と一致しません: $Path"
+  }
+}
+
+function Invoke-Builder([string]$Project, [string]$Prepackaged, [string]$CentralRoot) {
+  Push-Location $CentralRoot
   try {
     & pnpm exec electron-builder --projectDir $Project --config (Join-Path $Project 'electron-builder.yml') --prepackaged $Prepackaged --publish never
     Assert-ExternalSuccess 'electron-builderに失敗しました'
@@ -221,87 +235,134 @@ function Invoke-Builder([string]$Project, [string]$Prepackaged, [string]$Central
   }
 }
 
-function Set-WebPackageUrl([string]$Project, [string]$Url) {
-  $configPath = Join-Path $Project 'electron-builder.yml'
-  Assert-RegularFile $configPath 'WebSetup package projectがありません'
-  $contents = [System.IO.File]::ReadAllText($configPath)
-  $escapedUrl = $Url.Replace("'", "''")
-  $marker = 'nsisWeb:'
-  $markerIndex = $contents.IndexOf($marker, [System.StringComparison]::Ordinal)
-  if ($markerIndex -lt 0) {
-    throw 'WebSetup package projectのnsisWeb設定がありません'
+function Invoke-CreatePackageProject(
+  [string]$CentralRoot,
+  [string]$PackageInput,
+  [string]$Target,
+  [string]$RepositoryName,
+  [string]$ReleaseTag,
+  [string]$TimestampUrl,
+  [string]$OutputDirectory
+) {
+  Push-Location $CentralRoot
+  try {
+    & pnpm cli create-package-project --package-input-directory $PackageInput --target $Target --repository $RepositoryName --tag $ReleaseTag --timestamp-url $TimestampUrl --output-directory $OutputDirectory
+    Assert-ExternalSuccess "$Target package projectの生成に失敗しました"
+  } finally {
+    Pop-Location
   }
-  $lineStart = $markerIndex + $marker.Length
-  $remaining = $contents.Substring($lineStart)
-  if ($remaining.StartsWith("`r`n", [System.StringComparison]::Ordinal)) {
-    $lineBreak = "`r`n"
-  } elseif ($remaining.StartsWith("`n", [System.StringComparison]::Ordinal)) {
-    $lineBreak = "`n"
+}
+
+function Get-TargetOutputs([string]$DistDirectory, [string]$Target) {
+  Assert-Directory $DistDirectory 'electron-builderのdistがありません' | Out-Null
+  $entries = @(Get-ChildItem -LiteralPath $DistDirectory -Force -ErrorAction Stop)
+  if ($entries.Count -eq 0) {
+    throw "${Target}の出力がありません"
+  }
+  foreach ($entry in $entries) {
+    if ($entry -isnot [System.IO.FileInfo] -or ($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "${Target}の出力に通常file以外があります: $($entry.FullName)"
+    }
+    if ($entry.Length -eq 0) {
+      throw "${Target}の出力が空です: $($entry.Name)"
+    }
+  }
+  $executables = @($entries | Where-Object { $_.Extension -ieq '.exe' })
+  if ($executables.Count -ne 1) {
+    throw "${Target}のexe出力が一件ではありません"
+  }
+  $result = [ordered]@{ Installer = $executables[0] }
+  if ($Target -ceq 'windows-nsis') {
+    $blockmaps = @($entries | Where-Object { $_.Extension -ieq '.blockmap' })
+    $metadata = @($entries | Where-Object { $_.Extension -ieq '.yml' })
+    if ($blockmaps.Count -ne 1 -or $metadata.Count -ne 1) {
+      throw '通常NSISの必須出力が揃っていません'
+    }
+    $result.Blockmap = $blockmaps[0]
+    $result.Metadata = $metadata[0]
+  } elseif ($Target -ceq 'windows-nsis-web') {
+    $packages = @($entries | Where-Object { $_.Extension -ieq '.7z' })
+    if ($packages.Count -ne 1) {
+      throw 'NSIS Webの必須出力が揃っていません'
+    }
+    $result.Package = $packages[0]
   } else {
-    throw 'WebSetup package projectの改行を解析できません'
+    throw "未知のWindows targetです: $Target"
   }
-  $insertAt = $lineStart + $lineBreak.Length
-  $updated = $contents.Insert($insertAt, "  appPackageUrl: '$escapedUrl'$lineBreak")
-  [System.IO.File]::WriteAllText($configPath, $updated, [System.Text.UTF8Encoding]::new($false))
-  if (-not [System.IO.File]::ReadAllText($configPath).Contains("  appPackageUrl: '$escapedUrl'")) {
-    throw 'WebSetup package URLの設定に失敗しました'
+  $known = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($value in $result.Values) {
+    [void]$known.Add($value.FullName)
   }
+  if ($known.Count -ne $entries.Count) {
+    throw "${Target}の出力に想定外fileがあります"
+  }
+  return [pscustomobject]$result
 }
 
-function Assert-PackageProjects([string]$Normal, [string]$Web, [string]$Url) {
-  $normalConfig = [System.IO.File]::ReadAllText((Join-Path $Normal 'electron-builder.yml'))
-  $webConfig = [System.IO.File]::ReadAllText((Join-Path $Web 'electron-builder.yml'))
-  $escapedUrl = $Url.Replace("'", "''")
-  if ($normalConfig.Contains('publishAutoUpdate')) {
-    throw '通常NSIS package projectにWeb用publish設定があります'
+function Copy-ReleaseFile([System.IO.FileInfo]$Source, [string]$DestinationDirectory) {
+  $destination = Join-Path $DestinationDirectory $Source.Name
+  if (Test-Path -LiteralPath $destination) {
+    throw "release outputが既に存在します: $destination"
   }
-  if ($webConfig -notmatch '(?m)^\s+publishAutoUpdate: false\r?$') {
-    throw 'WebSetup package projectのpublishAutoUpdateが無効ではありません'
-  }
-  if (-not $webConfig.Contains("  appPackageUrl: '$escapedUrl'")) {
-    throw 'WebSetup package projectのappPackageUrlがcanonicalではありません'
-  }
+  Copy-Item -LiteralPath $Source.FullName -Destination $destination -ErrorAction Stop
+  Assert-RegularFile $destination 'release出力が通常fileではありません' | Out-Null
 }
 
-if (-not (Test-Path -LiteralPath $CentralRoot -PathType Container)) {
-  throw '中央repoのpathが不正です'
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$centralRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptRoot '../..'))
+$packageInputPath = Join-Path $PackageInputDirectory 'package-input.json'
+Assert-Directory $centralRoot '中央repoのpathが不正です' | Out-Null
+Assert-RegularFile $UnsignedArchive 'unsigned Windows archiveが通常fileではありません' | Out-Null
+Assert-Directory $PackageInputDirectory 'package-input directoryが通常directoryではありません' | Out-Null
+Assert-RegularFile $packageInputPath 'package-input.jsonが通常fileではありません' | Out-Null
+if ($Repository -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$') {
+  throw 'repositoryはowner/name形式でなければなりません'
 }
-foreach ($inputPath in @($ContractPath, $SourceManifestPath, $UnsignedArchive)) {
-  Assert-RegularFile $inputPath '入力pathが通常fileではありません'
+if ($Tag.Length -eq 0 -or $Tag.Contains("`n") -or $Tag.Contains("`r")) {
+  throw 'tagが不正です'
 }
-Assert-EmptyDirectory $AssetsDirectory
-$normalProjectFullPath = [System.IO.Path]::GetFullPath($NormalProject)
-$webProjectFullPath = [System.IO.Path]::GetFullPath($WebProject)
-if ([string]::Equals($normalProjectFullPath, $webProjectFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-  throw '通常NSISとWebSetupのpackage project outputが同一です'
+if ($ReleaseOutputDirectory.Length -eq 0) {
+  throw 'release output directoryが空です'
 }
-Assert-ProjectOutputPath $NormalProject
-Assert-ProjectOutputPath $WebProject
 
-$contract = Get-Content -LiteralPath $ContractPath -Raw | ConvertFrom-Json
-$sourceManifest = Get-Content -LiteralPath $SourceManifestPath -Raw | ConvertFrom-Json
-if ($sourceManifest.appId -ne $contract.appId -or $sourceManifest.repository -ne $contract.repository -or $sourceManifest.tag -ne $contract.tag -or
-    $sourceManifest.configDigest -ne $contract.configDigest -or $sourceManifest.sourceSha -notmatch '^[0-9a-fA-F]{40}$') {
-  throw 'source manifestとrelease contractが一致しません'
-}
-$signing = Get-Content -LiteralPath (Join-Path $CentralRoot 'config/signing.json') -Raw | ConvertFrom-Json
-if ($signing.windows.configured -ne $true) {
+$signingPath = Join-Path $centralRoot 'config/signing.json'
+Assert-RegularFile $signingPath 'signing設定が通常fileではありません' | Out-Null
+$signing = Get-Content -LiteralPath $signingPath -Raw -ErrorAction Stop | ConvertFrom-Json
+$windowsSigning = $signing.windows
+if ($windowsSigning.configured -ne $true) {
   throw 'Windows signingが未設定です'
 }
-$certificatePath = Get-CentralPath ([string]$signing.windows.certificatePath)
-Assert-RegularFile $certificatePath 'Windows公開証明書が通常fileではありません'
-$expectedFingerprint = ([string]$signing.windows.fingerprint).Replace(':', '').ToUpperInvariant()
-$displayName = [string]$signing.windows.displayName
-$timestampUrl = [string]$signing.windows.timestampUrl
-if ($expectedFingerprint -notmatch '^[0-9A-F]{64}$' -or $timestampUrl -notmatch '^https://') {
+$certificateRelativePath = [string]$windowsSigning.certificatePath
+$certificatePath = Get-CentralPath $centralRoot $certificateRelativePath
+Assert-RegularFile $certificatePath 'Windows公開証明書が通常fileではありません' | Out-Null
+$expectedFingerprint = ([string]$windowsSigning.fingerprint).Replace(':', '').Replace(' ', '').ToUpperInvariant()
+$expectedPublisher = [string]$windowsSigning.displayName
+$timestampUrl = [string]$windowsSigning.timestampUrl
+if ($expectedFingerprint -notmatch '^[0-9A-F]{64}$' -or $expectedPublisher.Length -eq 0 -or $timestampUrl -notmatch '^https://') {
   throw 'Windows signing設定が不正です'
 }
+
+$releaseRoot = [System.IO.Path]::GetFullPath($ReleaseOutputDirectory)
+if (Test-Path -LiteralPath $releaseRoot) {
+  Assert-Directory $releaseRoot 'release output directoryが通常directoryではありません' | Out-Null
+  if (@(Get-ChildItem -LiteralPath $releaseRoot -Force -ErrorAction Stop).Count -ne 0) {
+    throw 'release outputは空のdirectoryでなければなりません'
+  }
+} else {
+  New-Item -ItemType Directory -Path $releaseRoot -ErrorAction Stop | Out-Null
+}
+$payloadDirectory = Join-Path $releaseRoot 'payload'
+$metadataDirectory = Join-Path $releaseRoot 'metadata'
+Assert-EmptyDirectory $payloadDirectory 'release/payloadが空の通常directoryではありません'
+Assert-EmptyDirectory $metadataDirectory 'release/metadataが空の通常directoryではありません'
 
 $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('central-sign-windows-' + [Guid]::NewGuid().ToString('N'))
 $pfxPath = Join-Path $temporaryDirectory 'certificate.pfx'
 $sourceRoot = Join-Path $temporaryDirectory 'source'
-$normalDist = Join-Path $NormalProject 'dist'
-$webDist = Join-Path $WebProject 'dist'
+$normalProject = Join-Path $temporaryDirectory 'normal-project'
+$webProject = Join-Path $temporaryDirectory 'web-project'
+$normalDist = Join-Path $normalProject 'dist'
+$webDist = Join-Path $webProject 'dist'
 $operationException = $null
 $cleanupExceptions = [System.Collections.Generic.List[System.Exception]]::new()
 $rootStore = $null
@@ -313,47 +374,32 @@ $addedToPublisher = $false
 $publicCertificate = $null
 $pfxCertificate = $null
 $securePassword = $null
-$myStore = $null
-$myStoreOpened = $false
-$addedToMy = $false
-$storeCertificate = $null
-$myStoreBefore = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-$myStoreAddedCount = 0
-$myStoreImportAttempted = $false
 $signTool = $null
 $pfxBase64 = $null
 $pfxPasswordPlain = $null
-$normalProjectCreated = $false
-$webProjectCreated = $false
 
 try {
   New-Item -ItemType Directory -Path $temporaryDirectory -ErrorAction Stop | Out-Null
-  Invoke-SafeExtract $UnsignedArchive $sourceRoot $CentralRoot
+  Invoke-SafeExtract $UnsignedArchive $sourceRoot $centralRoot
+  Invoke-CreatePackageProject $centralRoot $PackageInputDirectory 'windows-nsis' $Repository $Tag $timestampUrl $normalProject
+  Invoke-CreatePackageProject $centralRoot $PackageInputDirectory 'windows-nsis-web' $Repository $Tag $timestampUrl $webProject
   $pfxBase64 = $env:WINDOWS_CERTIFICATE_PFX_BASE64
   $pfxPasswordPlain = $env:WINDOWS_CERTIFICATE_PASSWORD
+  $env:WINDOWS_CERTIFICATE_PFX_BASE64 = $null
+  $env:WINDOWS_CERTIFICATE_PASSWORD = $null
   if ([string]::IsNullOrEmpty($pfxBase64) -or [string]::IsNullOrEmpty($pfxPasswordPlain)) {
     throw 'Windows signing secretが空です'
   }
-  [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($pfxBase64))
+  try {
+    [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($pfxBase64))
+  } catch {
+    throw [System.InvalidOperationException]::new('Windows signing PFXの復元に失敗しました', $_.Exception)
+  }
   $publicCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
   if ($publicCertificate.HasPrivateKey) {
-    throw '公開証明書に秘密鍵が含まれています'
+    throw 'Windows公開証明書に秘密鍵が含まれています'
   }
-  $actualFingerprint = $publicCertificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant()
-  if ($actualFingerprint -cne $expectedFingerprint) {
-    throw "Windows公開証明書のSHA-256 fingerprintが一致しません: $actualFingerprint"
-  }
-  if ($publicCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -cne $displayName) {
-    throw 'Windows公開証明書のpublisherNameが一致しません'
-  }
-  $ekuExtension = @($publicCertificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' }) | Select-Object -First 1
-  if ($null -eq $ekuExtension) {
-    throw 'Windows公開証明書にCode Signing EKUがありません'
-  }
-  $enhancedKeyUsage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($ekuExtension, $false)
-  if (@($enhancedKeyUsage.EnhancedKeyUsages | Where-Object { $_.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -eq 0) {
-    throw 'Windows公開証明書にCode Signing EKUがありません'
-  }
+  Assert-CodeSigningCertificate $publicCertificate $expectedFingerprint $expectedPublisher 'Windows公開証明書'
 
   $securePassword = ConvertTo-SecureString $pfxPasswordPlain -AsPlainText -Force
   $pfxCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
@@ -364,12 +410,7 @@ try {
   if (-not $pfxCertificate.HasPrivateKey) {
     throw 'PFXに秘密鍵がありません'
   }
-  if ($pfxCertificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() -cne $expectedFingerprint) {
-    throw 'PFXのSHA-256 fingerprintが設定と一致しません'
-  }
-  if ($pfxCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -cne $displayName) {
-    throw 'PFXのpublisherNameが設定と一致しません'
-  }
+  Assert-CodeSigningCertificate $pfxCertificate $expectedFingerprint $expectedPublisher 'PFX'
 
   $rootStore = New-Store 'Root'
   $rootStoreOpened = $true
@@ -378,198 +419,64 @@ try {
   $addedToRoot = Add-TrustCertificate $rootStore $publicCertificate $expectedFingerprint
   $addedToPublisher = Add-TrustCertificate $publisherStore $publicCertificate $expectedFingerprint
 
-  $myStore = New-Store 'My'
-  $myStoreOpened = $true
-  foreach ($certificate in $myStore.Certificates) {
-    $certificateKey = $certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() + '|' + [string]$certificate.HasPrivateKey
-    [void]$myStoreBefore.Add($certificateKey)
-  }
-  $existingPrivate = @($myStore.Certificates | Where-Object {
-      $_.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() -ceq $expectedFingerprint -and $_.HasPrivateKey
-    })
-  if ($existingPrivate.Count -gt 1) {
-    throw 'CurrentUser Myに同じfingerprintの秘密証明書が複数あります'
-  }
-  if ($existingPrivate.Count -eq 1) {
-    $storeCertificate = $existingPrivate[0]
-  } else {
-    $myStoreImportAttempted = $true
-    $importedCertificates = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation 'Cert:\CurrentUser\My' -Password $securePassword -ErrorAction Stop)
-    $myStore.Close()
-    $myStoreOpened = $false
-    $myStore = New-Store 'My'
-    $myStoreOpened = $true
-    $myStoreAfter = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($certificate in $myStore.Certificates) {
-      $certificateKey = $certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() + '|' + [string]$certificate.HasPrivateKey
-      [void]$myStoreAfter.Add($certificateKey)
-    }
-    $myStoreAddedCount = @($myStoreAfter | Where-Object { -not $myStoreBefore.Contains($_) }).Count
-    if ($myStoreAddedCount -eq 0) {
-      throw 'PFX importによるCurrentUser Myの追加証明書を確認できません'
-    }
-    Write-Output "CurrentUser MyへPFX証明書を追加しました: $myStoreAddedCount 件"
-    $importedMatches = @($importedCertificates | Where-Object {
-        $_.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() -ceq $expectedFingerprint -and $_.HasPrivateKey
-      })
-    if ($importedMatches.Count -ne 1) {
-      throw 'PFXから期待した秘密証明書をCurrentUser Myへimportできません'
-    }
-    $storeCertificate = $importedMatches[0]
-    $addedToMy = $true
-  }
-  $signingThumbprint = $storeCertificate.Thumbprint.Replace(' ', '').ToUpperInvariant()
-  if ($signingThumbprint -notmatch '^[0-9A-F]{40}$') {
-    throw '署名用証明書のSHA-1 thumbprintが不正です'
-  }
-
   $signTool = Find-SignTool
-  $payloadEntries = @(Get-ChildItem -LiteralPath $sourceRoot -Force)
+  $payloadEntries = @(Get-ChildItem -LiteralPath $sourceRoot -Force -ErrorAction Stop)
   if ($payloadEntries.Count -ne 1 -or -not $payloadEntries[0].PSIsContainer -or ($payloadEntries[0].Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw 'unsigned Windows archiveは直下一件のdirectoryでなければなりません'
   }
   $payloadPath = $payloadEntries[0].FullName
-  $signFiles = @(Get-PortableExecutables $payloadPath)
+  $signFiles = @(Get-SignableFiles $payloadPath)
   if ($signFiles.Count -eq 0) {
     throw '署名対象のWindows codeがありません'
   }
   foreach ($file in $signFiles) {
-    & $signTool sign /fd SHA256 /sha1 $signingThumbprint /s My /tr $timestampUrl /td SHA256 $file.FullName
-    Assert-ExternalSuccess "Windows code署名に失敗しました: $($file.Name)"
-    Assert-AuthenticodeSigner $signTool $file.FullName $signingThumbprint $expectedFingerprint $displayName
-  }
-  $signedEntries = @(Get-PortableExecutables $payloadPath)
-  $expectedPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-  foreach ($file in $signFiles) { [void]$expectedPaths.Add($file.FullName) }
-  $actualPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-  foreach ($file in $signedEntries) { [void]$actualPaths.Add($file.FullName) }
-  if ($expectedPaths.Count -ne $actualPaths.Count) {
-    throw '署名前後のWindows PE対象が一致しません'
-  }
-  foreach ($path in $expectedPaths) {
-    if (-not $actualPaths.Contains($path)) {
-      throw '署名前後のWindows PE対象が一致しません'
-    }
-  }
-  foreach ($file in $signedEntries) {
-    Assert-AuthenticodeSigner $signTool $file.FullName $signingThumbprint $expectedFingerprint $displayName
+    Invoke-SignTool $signTool $file.FullName $pfxPath $pfxPasswordPlain $timestampUrl
+    Assert-AuthenticodeSigner $signTool $file.FullName $expectedFingerprint $expectedPublisher
   }
 
   $env:CSC_LINK = $pfxPath
   $env:CSC_KEY_PASSWORD = $pfxPasswordPlain
   $env:WIN_CSC_LINK = $pfxPath
   $env:WIN_CSC_KEY_PASSWORD = $pfxPasswordPlain
-  Push-Location $CentralRoot
-  try {
-    $normalProjectCreated = $true
-    & pnpm exec tsx src/cli.ts create-package-project --contract $ContractPath --target windows-nsis --output-directory $NormalProject
-    Assert-ExternalSuccess '通常NSIS package projectの生成に失敗しました'
-    $webProjectCreated = $true
-    & pnpm exec tsx src/cli.ts create-package-project --contract $ContractPath --target windows-nsis-web --output-directory $WebProject
-    Assert-ExternalSuccess 'WebSetup package projectの生成に失敗しました'
-  } finally {
-    Pop-Location
+  $env:CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+  Invoke-Builder $normalProject $payloadPath $centralRoot
+  Invoke-Builder $webProject $payloadPath $centralRoot
+
+  $normalOutputs = Get-TargetOutputs $normalDist 'windows-nsis'
+  $webOutputs = Get-TargetOutputs $webDist 'windows-nsis-web'
+  foreach ($installer in @($normalOutputs.Installer, $webOutputs.Installer)) {
+    Assert-AuthenticodeSigner $signTool $installer.FullName $expectedFingerprint $expectedPublisher
   }
 
-  $version = [string]$contract.version
-  $artifactName = [string]$contract.application.identity.artifactName
-  $architecture = [string]$contract.application.windows.architecture
-  $channel = [string]$contract.application.release.channel
-  $packageName = [string]$contract.application.packageName
-  $sanitizedPackageName = [regex]::Replace($packageName, '[\\/:*?"<>|]', '')
-  $sanitizedPackageName = [regex]::Replace($sanitizedPackageName, '^\.+$', '')
-  $sanitizedPackageName = [regex]::Replace($sanitizedPackageName, '[. ]+$', '')
-  if ([string]::IsNullOrEmpty($sanitizedPackageName) -or $sanitizedPackageName -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?$') {
-    throw 'packageNameからWeb package filenameを生成できません'
-  }
-  if ($sanitizedPackageName.Length -gt 255) {
-    $sanitizedPackageName = $sanitizedPackageName.Substring(0, 255)
-  }
-  $normalName = "$artifactName-Setup-$version.exe"
-  $normalBlockmapName = "$normalName.blockmap"
-  $webSetupName = "$artifactName-WebSetup-$version.exe"
-  $webPackageName = "$sanitizedPackageName-$version-$architecture.nsis.7z"
-  $metadataName = "$channel.yml"
-  $webPackageUrl = "https://github.com/$($contract.repository)/releases/download/$([Uri]::EscapeDataString([string]$contract.tag))/$([Uri]::EscapeDataString($webPackageName))"
-  Set-WebPackageUrl $WebProject $webPackageUrl
-  Assert-PackageProjects $NormalProject $WebProject $webPackageUrl
-
-  Invoke-Builder $NormalProject $payloadPath $CentralRoot
-  Invoke-Builder $WebProject $payloadPath $CentralRoot
-
-  foreach ($expected in @(
-      (Join-Path $normalDist $normalName),
-      (Join-Path $normalDist $normalBlockmapName),
-      (Join-Path $normalDist $metadataName),
-      (Join-Path $webDist $webSetupName),
-      (Join-Path $webDist $webPackageName)
-    )) {
-    Assert-RegularFile $expected "Windows package assetがありません: $expected"
-  }
-  foreach ($installer in @(
-      (Join-Path $normalDist $normalName),
-      (Join-Path $webDist $webSetupName)
-    )) {
-    Assert-AuthenticodeSigner $signTool $installer $signingThumbprint $expectedFingerprint $displayName
-  }
-  Copy-Item -LiteralPath (Join-Path $normalDist $normalName) -Destination (Join-Path $AssetsDirectory $normalName) -Force
-  Copy-Item -LiteralPath (Join-Path $normalDist $normalBlockmapName) -Destination (Join-Path $AssetsDirectory $normalBlockmapName) -Force
-  Copy-Item -LiteralPath (Join-Path $normalDist $metadataName) -Destination (Join-Path $AssetsDirectory $metadataName) -Force
-  Copy-Item -LiteralPath (Join-Path $webDist $webSetupName) -Destination (Join-Path $AssetsDirectory $webSetupName) -Force
-  Copy-Item -LiteralPath (Join-Path $webDist $webPackageName) -Destination (Join-Path $AssetsDirectory $webPackageName) -Force
-  tar -cf $AssetsArchive -C $AssetsDirectory .
-  Assert-ExternalSuccess 'Windows signed assets archiveの作成に失敗しました'
-  if (-not (Test-Path -LiteralPath $AssetsArchive -PathType Leaf)) {
-    throw 'Windows signed assets archiveがありません'
-  }
+  Copy-ReleaseFile $normalOutputs.Installer $payloadDirectory
+  Copy-ReleaseFile $normalOutputs.Blockmap $payloadDirectory
+  Copy-ReleaseFile $webOutputs.Installer $payloadDirectory
+  Copy-ReleaseFile $webOutputs.Package $payloadDirectory
+  Copy-ReleaseFile $normalOutputs.Metadata $metadataDirectory
 } catch {
   $operationException = $_.Exception
 } finally {
+  $env:WINDOWS_CERTIFICATE_PFX_BASE64 = $null
+  $env:WINDOWS_CERTIFICATE_PASSWORD = $null
   $env:CSC_LINK = $null
   $env:CSC_KEY_PASSWORD = $null
   $env:WIN_CSC_LINK = $null
   $env:WIN_CSC_KEY_PASSWORD = $null
-  if ($myStoreImportAttempted) {
-    try {
-      if ($myStoreOpened -and $null -ne $myStore) {
-        $myStore.Close()
-        $myStoreOpened = $false
-      }
-      $cleanupMyStore = New-Store 'My'
-      try {
-        foreach ($certificate in @($cleanupMyStore.Certificates)) {
-          $certificateKey = $certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant() + '|' + [string]$certificate.HasPrivateKey
-          if (-not $myStoreBefore.Contains($certificateKey)) {
-            Remove-AddedCertificate $cleanupMyStore $certificate
-          }
-        }
-      } finally {
-        $cleanupMyStore.Close()
-      }
-    } catch { [void]$cleanupExceptions.Add($_.Exception) }
-  } elseif ($myStoreOpened -and $null -ne $myStore) {
-    if ($addedToMy -and $null -ne $storeCertificate) {
-      try { Remove-AddedCertificate $myStore $storeCertificate } catch { [void]$cleanupExceptions.Add($_.Exception) }
-    }
-    try { $myStore.Close() } catch { [void]$cleanupExceptions.Add($_.Exception) }
-  }
+  $env:CSC_IDENTITY_AUTO_DISCOVERY = $null
   if ($publisherStoreOpened -and $null -ne $publisherStore) {
-    if ($addedToPublisher) {
+    if ($addedToPublisher -and $null -ne $publicCertificate) {
       try { Remove-AddedCertificate $publisherStore $publicCertificate } catch { [void]$cleanupExceptions.Add($_.Exception) }
     }
     try { $publisherStore.Close() } catch { [void]$cleanupExceptions.Add($_.Exception) }
   }
   if ($rootStoreOpened -and $null -ne $rootStore) {
-    if ($addedToRoot) {
+    if ($addedToRoot -and $null -ne $publicCertificate) {
       try { Remove-AddedCertificate $rootStore $publicCertificate } catch { [void]$cleanupExceptions.Add($_.Exception) }
     }
     try { $rootStore.Close() } catch { [void]$cleanupExceptions.Add($_.Exception) }
   }
   if ($null -ne $pfxCertificate) {
     try { $pfxCertificate.Dispose() } catch { [void]$cleanupExceptions.Add($_.Exception) }
-  }
-  if ($null -ne $storeCertificate) {
-    try { $storeCertificate.Dispose() } catch { [void]$cleanupExceptions.Add($_.Exception) }
   }
   if ($null -ne $publicCertificate) {
     try { $publicCertificate.Dispose() } catch { [void]$cleanupExceptions.Add($_.Exception) }
@@ -583,14 +490,6 @@ try {
   if (Test-Path -LiteralPath $temporaryDirectory) {
     try { Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction Stop } catch { [void]$cleanupExceptions.Add($_.Exception) }
   }
-  if ($webProjectCreated -and (Test-Path -LiteralPath $WebProject)) {
-    try { Remove-Item -LiteralPath $WebProject -Recurse -Force -ErrorAction Stop } catch { [void]$cleanupExceptions.Add($_.Exception) }
-  }
-  if ($normalProjectCreated -and (Test-Path -LiteralPath $NormalProject)) {
-    try { Remove-Item -LiteralPath $NormalProject -Recurse -Force -ErrorAction Stop } catch { [void]$cleanupExceptions.Add($_.Exception) }
-  }
-  $env:WINDOWS_CERTIFICATE_PFX_BASE64 = $null
-  $env:WINDOWS_CERTIFICATE_PASSWORD = $null
   $pfxBase64 = $null
   $pfxPasswordPlain = $null
 }
@@ -598,7 +497,9 @@ try {
 if ($null -ne $operationException -and $cleanupExceptions.Count -ne 0) {
   $allExceptions = [System.Collections.Generic.List[System.Exception]]::new()
   [void]$allExceptions.Add($operationException)
-  foreach ($cleanupException in $cleanupExceptions) { [void]$allExceptions.Add($cleanupException) }
+  foreach ($cleanupException in $cleanupExceptions) {
+    [void]$allExceptions.Add($cleanupException)
+  }
   throw [System.AggregateException]::new('Windows署名処理とcleanupの両方に失敗しました', $allExceptions)
 }
 if ($null -ne $operationException) {

@@ -136,9 +136,7 @@ cleanup() {
 trap cleanup EXIT
 
 openssl_config_path="$temp_directory/openssl.cnf"
-certificate_text_path="$temp_directory/certificate.txt"
 subject_text_path="$temp_directory/subject.txt"
-private_key_text_path="$temp_directory/private-key.txt"
 private_key_path="$temp_directory/private-key.pem"
 certificate_pem_path="$temp_directory/certificate.pem"
 certificate_der_path="$temp_directory/certificate.cer"
@@ -146,9 +144,6 @@ p12_path="$temp_directory/certificate.p12"
 fingerprint_path="$temp_directory/fingerprint.txt"
 reimport_certificate_pem_path="$temp_directory/reimport-certificate.pem"
 reimport_certificate_der_path="$temp_directory/reimport-certificate.cer"
-reimport_key_path="$temp_directory/reimport-key.pem"
-public_key_path="$temp_directory/public-key.der"
-reimport_public_key_path="$temp_directory/reimport-public-key.der"
 
 cat > "$openssl_config_path" <<EOF
 [ req ]
@@ -183,21 +178,9 @@ openssl x509 \
   -outform DER \
   -out "$certificate_der_path"
 
-openssl rsa -in "$private_key_path" -text -noout > "$private_key_text_path" 2>/dev/null
-if ! grep -Fq '3072 bit' "$private_key_text_path"; then
-  fail '生成された秘密鍵がRSA 3072ではありません。'
-fi
-
-openssl x509 -in "$certificate_pem_path" -noout -text > "$certificate_text_path"
 openssl x509 -in "$certificate_pem_path" -noout -subject -nameopt RFC2253 > "$subject_text_path"
 if ! grep -Fqx "subject=CN=$display_name" "$subject_text_path"; then
   fail '生成された証明書のsubjectが指定値と一致しません。'
-fi
-if ! grep -Fq 'sha256WithRSAEncryption' "$certificate_text_path"; then
-  fail '生成された証明書の署名アルゴリズムがSHA-256ではありません。'
-fi
-if ! grep -Fq 'Code Signing' "$certificate_text_path"; then
-  fail '生成された証明書にCode Signing EKUがありません。'
 fi
 
 sha1_fingerprint=$(openssl dgst -sha1 -r "$certificate_der_path" | awk '{ print toupper($1) }')
@@ -232,20 +215,6 @@ openssl x509 \
   -out "$reimport_certificate_der_path"
 if ! cmp -s "$certificate_der_path" "$reimport_certificate_der_path"; then
   fail 'P12から再取得した証明書がDER CERと一致しません。'
-fi
-
-openssl pkcs12 \
-  -in "$p12_path" \
-  -passin fd:3 \
-  -nocerts \
-  -nodes \
-  -out "$reimport_key_path" \
-  3<<<"$p12_password"
-openssl rsa -in "$reimport_key_path" -check -noout >/dev/null 2>&1
-openssl pkey -in "$private_key_path" -pubout -outform DER -out "$public_key_path"
-openssl pkey -in "$reimport_key_path" -pubout -outform DER -out "$reimport_public_key_path"
-if ! cmp -s "$public_key_path" "$reimport_public_key_path"; then
-  fail 'P12から再取得した秘密鍵が生成元の鍵と一致しません。'
 fi
 
 printf 'subject=CN=%s\nsha1_fingerprint=%s\nsha256_fingerprint=%s\nvalidity_days=%s\n' \

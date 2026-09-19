@@ -20,7 +20,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   fail 'このスクリプトはmacOSで実行してください。'
 fi
 
-for required_command in uname openssl security uuidgen mktemp awk grep sed base64 tr plutil chmod mv dirname basename cmp cat rm; do
+for required_command in uname openssl security uuidgen mktemp awk sed base64 tr plutil chmod mv dirname basename cmp cat rm; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     fail "必要なコマンドが見つかりません: $required_command"
   fi
@@ -72,10 +72,7 @@ trap cleanup EXIT
 
 canonical_der_path="$temp_directory/certificate.der"
 certificate_text_path="$temp_directory/certificate.txt"
-purpose_text_path="$temp_directory/certificate-purpose.txt"
 verify_text_path="$temp_directory/certificate-verify.txt"
-asn1_text_path="$temp_directory/certificate-asn1.txt"
-oid_definitions_path="$temp_directory/oid-definitions.txt"
 profile_temp_path="$temp_directory/profile.mobileconfig"
 
 openssl x509 \
@@ -91,11 +88,6 @@ openssl x509 \
   -in "$canonical_der_path" \
   -noout \
   -text > "$certificate_text_path"
-openssl x509 \
-  -inform DER \
-  -in "$canonical_der_path" \
-  -noout \
-  -purpose > "$purpose_text_path"
 
 certificate_subject=$(openssl x509 -inform DER -in "$canonical_der_path" -noout -subject -nameopt RFC2253 | sed -n 's/^subject=//p')
 certificate_issuer=$(openssl x509 -inform DER -in "$canonical_der_path" -noout -issuer -nameopt RFC2253 | sed -n 's/^issuer=//p')
@@ -104,13 +96,6 @@ if [[ -z "$certificate_subject" || "$certificate_subject" != "$certificate_issue
 fi
 if ! security verify-cert -c "$canonical_der_path" -r "$canonical_der_path" -p codeSign > "$verify_text_path" 2>&1; then
   fail '入力証明書の自己署名を検証できません。'
-fi
-
-code_signing_oid='1.3.6.1.5.5.7.3.3'
-printf 'codeSigning = %s\n' "$code_signing_oid" > "$oid_definitions_path"
-openssl asn1parse -inform DER -in "$canonical_der_path" -i -oid "$oid_definitions_path" > "$asn1_text_path"
-if ! grep -Fq 'OBJECT :codeSigning' "$asn1_text_path"; then
-  fail "入力証明書のExtended Key UsageにOID $code_signing_oid がありません。"
 fi
 
 if ! awk '
@@ -129,12 +114,6 @@ in_eku && tolower($0) ~ /code signing/ { found = 1 }
 END { exit(found ? 0 : 1) }
 ' "$certificate_text_path"; then
   fail '入力証明書のExtended Key UsageにCode Signingがありません。'
-fi
-if ! awk '
-tolower($0) ~ /^[[:space:]]*code signing[[:space:]]*:[[:space:]]*yes[[:space:]]*$/ { found = 1 }
-END { exit(found ? 0 : 1) }
-' "$purpose_text_path"; then
-  fail '入力証明書のCode Signing purposeが有効ではありません。'
 fi
 
 sha1_fingerprint=$(openssl dgst -sha1 -r "$canonical_der_path" | awk '{ print toupper($1) }')

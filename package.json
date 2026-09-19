@@ -3,12 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.30.2",
   "engines": {
-    "node": "22.x",
-    "pnpm": "10.x"
+    "node": "22.x"
   },
   "scripts": {
-    "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write package.json tsconfig.json eslint.config.mjs .prettierrc.json config src",
@@ -24,8 +23,6 @@
   "devDependencies": {
     "@eslint/js": "9.27.0",
     "@types/node": "22.15.30",
-    "@typescript-eslint/eslint-plugin": "8.32.1",
-    "@typescript-eslint/parser": "8.32.1",
     "eslint": "9.27.0",
     "prettier": "3.5.3",
     "tsx": "4.19.4",

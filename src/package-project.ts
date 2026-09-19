@@ -1,166 +1,53 @@
-import {
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  rmSync,
-  writeFileSync
-} from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { stringify as stringifyYaml } from "yaml";
-import { assertReleaseContractCurrent } from "./source-validation.js";
-import type { ReleaseContract } from "./schema.js";
-import { parseReleaseContract } from "./schema.js";
-import {
-  assertNoSymlinkAncestors,
-  assertNoSymlinkPath,
-  assertRealPathWithin
-} from "./path-safety.js";
+import { loadSigningConfig } from "./config.js";
+import { parsePackageInput, type PackageInput, type PackageProjectTarget } from "./schema.js";
+import { assertNoSymlinkAncestors, assertNoSymlinkPath } from "./path-safety.js";
 
-export type PackageProjectTarget = "macos" | "windows-nsis" | "windows-nsis-web";
+export type { PackageProjectTarget } from "./schema.js";
+
+type MacosPackageProjectRequest = {
+  packageInputDirectory: string;
+  target: "macos";
+  repository: string;
+  tag: string;
+  outputDirectory: string;
+};
+type WindowsPackageProjectRequest = {
+  packageInputDirectory: string;
+  target: "windows-nsis" | "windows-nsis-web";
+  repository: string;
+  tag: string;
+  outputDirectory: string;
+  timestampUrl: string;
+};
+export type PackageProjectRequest = MacosPackageProjectRequest | WindowsPackageProjectRequest;
 
 const MAC_ENTITLEMENTS_FILE = "entitlements.plist";
 const MAC_ENTITLEMENTS_INHERIT_FILE = "entitlements-inherit.plist";
 
-type CentralFile = { sourcePath: string; contents: Buffer };
-type MacEntitlements = {
-  entitlementsPath: string;
-  entitlementsInheritPath: string;
-  entitlementsFile: CentralFile;
-  entitlementsInheritFile: CentralFile;
-};
-type ExpectedProjectFile = { name: string; contents: Buffer };
-type DirectoryIdentity = { device: bigint; inode: bigint };
-type OutputTarget = {
-  requestedPath: string;
-  parentRealPath: string;
-  parentIdentity: DirectoryIdentity;
-  outputPath: string;
-};
-type CreatedOutput = { target: OutputTarget; identity: DirectoryIdentity };
+function globalPublisherName(): string | undefined {
+  const centralRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const signing = loadSigningConfig(centralRoot);
+  return signing.windows.configured === true ? signing.windows.displayName : undefined;
+}
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && typeof error.code === "string";
 }
 
-function assertDirectoryIdentity(path: string, identity: DirectoryIdentity, message: string): void {
+function assertDirectory(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
   let information;
   try {
-    information = lstatSync(path, { bigint: true });
+    information = lstatSync(path);
   } catch (error) {
     throw new Error(`${message}: ${path}`, { cause: error });
   }
-  if (
-    !information.isDirectory() ||
-    information.dev !== identity.device ||
-    information.ino !== identity.inode
-  ) {
+  if (!information.isDirectory() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
-  }
-}
-
-function assertOutputAbsent(path: string): void {
-  try {
-    lstatSync(path, { bigint: true });
-  } catch (error) {
-    if (isErrnoException(error) && error.code === "ENOENT") {
-      return;
-    }
-    throw new Error(`output-directoryを確認できません: ${path}`, { cause: error });
-  }
-  throw new Error(`output-directoryは開始時に存在してはいけません: ${path}`);
-}
-
-function prepareOutputTarget(path: string): OutputTarget {
-  const requestedPath = resolve(path);
-  const parentPath = dirname(requestedPath);
-  assertNoSymlinkAncestors(requestedPath, "output-directoryの親pathにsymlinkを指定できません");
-  assertNoSymlinkPath(parentPath, "output-directoryの親pathにsymlinkを指定できません");
-  let parentRealPath: string;
-  try {
-    parentRealPath = realpathSync(parentPath);
-  } catch (error) {
-    throw new Error(`output-directoryの親pathを解決できません: ${parentPath}`, { cause: error });
-  }
-  assertNoSymlinkPath(parentRealPath, "output-directoryの物理親pathが不正です");
-  let parentInformation;
-  try {
-    parentInformation = lstatSync(parentRealPath, { bigint: true });
-  } catch (error) {
-    throw new Error(`output-directoryの親pathを確認できません: ${parentRealPath}`, {
-      cause: error
-    });
-  }
-  if (!parentInformation.isDirectory()) {
-    throw new Error(`output-directoryの親pathがディレクトリではありません: ${parentRealPath}`);
-  }
-  const outputPath = join(parentRealPath, basename(requestedPath));
-  assertOutputAbsent(outputPath);
-  return {
-    requestedPath,
-    parentRealPath,
-    parentIdentity: { device: parentInformation.dev, inode: parentInformation.ino },
-    outputPath
-  };
-}
-
-function assertCreatedOutput(output: CreatedOutput): void {
-  assertDirectoryIdentity(
-    output.target.parentRealPath,
-    output.target.parentIdentity,
-    "output-directoryの親pathが途中で差し替えられました"
-  );
-  assertNoSymlinkPath(output.target.outputPath, "output-directoryにsymlinkを指定できません");
-  let information;
-  try {
-    information = lstatSync(output.target.outputPath, { bigint: true });
-  } catch (error) {
-    throw new Error(`output-directoryを確認できません: ${output.target.outputPath}`, {
-      cause: error
-    });
-  }
-  if (
-    !information.isDirectory() ||
-    information.dev !== output.identity.device ||
-    information.ino !== output.identity.inode
-  ) {
-    throw new Error(`output-directoryが途中で差し替えられました: ${output.target.outputPath}`);
-  }
-  if (process.platform !== "win32" && (information.mode & 0o777n) !== 0o700n) {
-    throw new Error(`output-directoryの権限が不正です: ${output.target.outputPath}`);
-  }
-}
-
-function createOutputDirectory(target: OutputTarget): CreatedOutput {
-  try {
-    mkdirSync(target.outputPath, { mode: 0o700 });
-  } catch (error) {
-    throw new Error(`output-directoryを作成できません: ${target.outputPath}`, { cause: error });
-  }
-  let information;
-  try {
-    information = lstatSync(target.outputPath, { bigint: true });
-  } catch (error) {
-    throw new Error(`作成したoutput-directoryを確認できません: ${target.outputPath}`, {
-      cause: error
-    });
-  }
-  const output: CreatedOutput = {
-    target,
-    identity: { device: information.dev, inode: information.ino }
-  };
-  try {
-    assertCreatedOutput(output);
-    assertRealPathWithin(
-      target.parentRealPath,
-      target.outputPath,
-      "output-directoryが親pathの外を参照しています"
-    );
-    return output;
-  } catch (error) {
-    cleanupCreatedOutput(error, output);
   }
 }
 
@@ -168,368 +55,296 @@ function assertRegularFile(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
   let information;
   try {
-    information = lstatSync(path, { bigint: true });
+    information = lstatSync(path);
   } catch (error) {
     throw new Error(`${message}: ${path}`, { cause: error });
   }
-  if (information.isSymbolicLink() || !information.isFile()) {
+  if (!information.isFile() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
   }
 }
 
-function readFileContents(path: string, message: string): Buffer {
+function readJson(path: string): unknown {
+  assertRegularFile(path, "package-input.jsonがありません");
+  let source: string;
   try {
-    return readFileSync(path);
+    source = readFileSync(path, "utf8");
   } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
+    throw new Error(`package-input.jsonを読み込めません: ${path}`, { cause: error });
+  }
+  try {
+    return JSON.parse(source);
+  } catch (error) {
+    throw new Error(`package-input.jsonを解析できません: ${path}`, { cause: error });
   }
 }
 
-function writeExclusiveFile(output: CreatedOutput, name: string, contents: Buffer): void {
-  assertCreatedOutput(output);
-  const path = join(output.target.outputPath, name);
+function createOutputDirectory(path: string): string {
+  const outputPath = resolve(path);
+  assertNoSymlinkAncestors(outputPath, "output directoryの親pathにsymlinkを指定できません");
+  const parentPath = dirname(outputPath);
+  assertDirectory(parentPath, "output directoryの親pathがディレクトリではありません");
+  try {
+    lstatSync(outputPath);
+  } catch (error) {
+    if (!isErrnoException(error) || error.code !== "ENOENT") {
+      throw new Error(`output directoryを確認できません: ${outputPath}`, { cause: error });
+    }
+    try {
+      mkdirSync(outputPath, { mode: 0o700 });
+      return outputPath;
+    } catch (mkdirError) {
+      throw new Error(`output directoryを作成できません: ${outputPath}`, { cause: mkdirError });
+    }
+  }
+  throw new Error(`output directoryは開始時に存在してはいけません: ${outputPath}`);
+}
+
+function writeExclusive(path: string, contents: Buffer | string): void {
   try {
     writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
   } catch (error) {
-    throw new Error(`package projectのfileを書き込めません: ${path}`, { cause: error });
+    throw new Error(`package projectを書き込めません: ${path}`, { cause: error });
   }
   assertRegularFile(path, "package projectのfileがregular fileではありません");
-  const writtenContents = readFileContents(path, "package projectのfileを読み込めません");
-  if (!writtenContents.equals(contents)) {
-    throw new Error(`package projectのfileのbytesが一致しません: ${path}`);
-  }
-  assertCreatedOutput(output);
 }
 
-function verifyProjectFiles(output: CreatedOutput, expectedFiles: ExpectedProjectFile[]): void {
-  assertCreatedOutput(output);
-  const expectedNames = new Set(expectedFiles.map((file) => file.name));
-  if (expectedNames.size !== expectedFiles.length) {
-    throw new Error("package projectのfile名が重複しています");
-  }
-  let entries: string[];
-  try {
-    entries = readdirSync(output.target.outputPath);
-  } catch (error) {
-    throw new Error(`package projectのdirectoryを読み込めません: ${output.target.outputPath}`, {
-      cause: error
-    });
-  }
-  if (entries.length !== expectedFiles.length) {
-    throw new Error(`package projectのfile件数が一致しません: ${output.target.outputPath}`);
-  }
-  for (const entry of entries) {
-    if (!expectedNames.has(entry)) {
-      throw new Error(`想定外のpackage project fileです: ${entry}`);
-    }
-  }
-  for (const expectedFile of expectedFiles) {
-    const path = join(output.target.outputPath, expectedFile.name);
-    assertRegularFile(path, "package projectのfileがregular fileではありません");
-    const contents = readFileContents(path, "package projectのfileを読み込めません");
-    if (!contents.equals(expectedFile.contents)) {
-      throw new Error(`package projectのfileのbytesが一致しません: ${path}`);
-    }
-  }
-  assertCreatedOutput(output);
-}
-
-function removeCreatedOutput(output: CreatedOutput): void {
-  assertCreatedOutput(output);
-  try {
-    rmSync(output.target.outputPath, { recursive: true });
-  } catch (error) {
-    throw new Error(`作成したoutput-directoryを削除できません: ${output.target.outputPath}`, {
-      cause: error
-    });
-  }
-  assertOutputAbsent(output.target.outputPath);
-}
-
-function cleanupCreatedOutput(error: unknown, output: CreatedOutput): never {
-  try {
-    removeCreatedOutput(output);
-  } catch (cleanupError) {
-    throw new AggregateError(
-      [error, cleanupError],
-      "package project生成に失敗し作成したoutput-directoryも削除できません"
-    );
-  }
-  throw error;
-}
-
-function readCentralFile(rootDirectory: string, centralPath: string): CentralFile {
-  const sourcePath = resolve(rootDirectory, centralPath);
-  assertRegularFile(sourcePath, "中央entitlementsがregular fileではありません");
-  assertRealPathWithin(
-    resolve(rootDirectory),
-    sourcePath,
-    "中央entitlementsが中央rootの外を参照しています"
-  );
-  return {
-    sourcePath,
-    contents: readFileContents(sourcePath, "中央entitlementsを読み込めません")
-  };
-}
-
-function readMacEntitlements(
-  rootDirectory: string,
-  contract: ReleaseContract,
-  outputPath: string
-): MacEntitlements {
-  const entitlementsFile = readCentralFile(rootDirectory, contract.application.macos.entitlements);
-  const entitlementsInheritFile = readCentralFile(
-    rootDirectory,
-    contract.application.macos.entitlementsInherit
-  );
-  return {
-    entitlementsPath: resolve(outputPath, MAC_ENTITLEMENTS_FILE),
-    entitlementsInheritPath: resolve(outputPath, MAC_ENTITLEMENTS_INHERIT_FILE),
-    entitlementsFile,
-    entitlementsInheritFile
-  };
-}
-
-function assertCentralFileUnchanged(file: CentralFile): void {
-  assertRegularFile(file.sourcePath, "中央entitlementsがregular fileではありません");
-  const currentContents = readFileContents(file.sourcePath, "中央entitlementsを読み込めません");
-  if (!currentContents.equals(file.contents)) {
-    throw new Error(`中央entitlementsがコピー中に変更されました: ${file.sourcePath}`);
-  }
-}
-
-function packageJson(contract: ReleaseContract): Record<string, unknown> {
-  return {
-    name: contract.application.packageName,
-    version: contract.version,
+function packageJson(input: PackageInput): string {
+  const value = {
+    name: input.name,
+    version: input.version,
     private: true,
-    repository: {
-      type: "git",
-      url: `https://github.com/${contract.repository}.git`
-    }
+    ...(input.description == undefined ? {} : { description: input.description }),
+    ...(input.author == undefined ? {} : { author: input.author })
   };
-}
-
-function repositoryParts(contract: ReleaseContract): { owner: string; repo: string } {
-  const parts = contract.repository.split("/");
-  const owner = parts[0];
-  const repo = parts[1];
-  if (parts.length !== 2 || owner === undefined || repo === undefined) {
-    throw new Error("repositoryはowner/name形式でなければなりません");
+  const contents = JSON.stringify(value, null, 2);
+  if (contents == undefined) {
+    throw new Error("package projectのpackage.jsonを生成できません");
   }
-  return { owner, repo };
+  return `${contents}\n`;
 }
 
-function githubPublishConfiguration(contract: ReleaseContract): Record<string, unknown> {
-  const { owner, repo } = repositoryParts(contract);
-  return {
-    provider: "github",
-    owner,
-    repo,
-    channel: contract.application.release.channel
-  };
+function githubUrl(repository: string, tag: string): string {
+  return `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}`;
 }
 
-function commonBuilderConfig(contract: ReleaseContract): Record<string, unknown> {
-  return {
-    appId: contract.application.identity.appId,
-    productName: contract.application.identity.productName,
-    publish: githubPublishConfiguration(contract)
-  };
-}
-
-function macBuilderConfig(
-  contract: ReleaseContract,
-  macEntitlements: MacEntitlements
+function genericPublish(
+  repository: string,
+  tag: string,
+  publishAutoUpdate: boolean
 ): Record<string, unknown> {
-  const common = commonBuilderConfig(contract);
-  const artifactName = contract.application.identity.artifactName;
   return {
-    ...common,
-    mac: {
-      target: [
-        {
-          target: "zip",
-          arch: [contract.application.macos.architecture]
-        },
-        {
-          target: "dmg",
-          arch: [contract.application.macos.architecture]
-        }
-      ],
-      artifactName: `${artifactName}-\${version}-\${arch}.\${ext}`,
-      entitlements: macEntitlements.entitlementsPath,
-      entitlementsInherit: macEntitlements.entitlementsInheritPath,
-      hardenedRuntime: true,
-      gatekeeperAssess: false
+    provider: "generic",
+    url: githubUrl(repository, tag),
+    publishAutoUpdate
+  };
+}
+
+function copyInputFile(
+  inputRoot: string,
+  relativePath: string,
+  outputPath: string,
+  label: string
+): void {
+  const sourcePath = resolve(inputRoot, relativePath);
+  assertRegularFile(sourcePath, `package inputの${label}がregular fileではありません`);
+  let contents: Buffer;
+  try {
+    contents = readFileSync(sourcePath);
+  } catch (error) {
+    throw new Error(`package inputの${label}を読み込めません: ${sourcePath}`, { cause: error });
+  }
+  writeExclusive(outputPath, contents);
+}
+
+function validateInputPlatform(input: PackageInput, target: PackageProjectTarget): void {
+  if (target === "macos" && input.platform !== "macos") {
+    throw new Error("macos targetにはmacos package inputが必要です");
+  }
+  if (target !== "macos" && input.platform !== "windows") {
+    throw new Error("Windows targetにはwindows package inputが必要です");
+  }
+}
+
+function commonBuilder(input: PackageInput): Record<string, unknown> {
+  return {
+    appId: input.appId,
+    productName: input.productName,
+    ...(input.copyright == undefined ? {} : { copyright: input.copyright })
+  };
+}
+
+function macBuilder(input: Extract<PackageInput, { platform: "macos" }>): Record<string, unknown> {
+  const mac = input.macos;
+  const config: Record<string, unknown> = {
+    target: [{ target: "zip", arch: [mac.architecture] }]
+  };
+  if (mac.artifactName != undefined) {
+    config.artifactName = mac.artifactName;
+  }
+  if (mac.entitlements != undefined) {
+    config.entitlements = mac.entitlements;
+  }
+  if (mac.entitlementsInherit != undefined) {
+    config.entitlementsInherit = mac.entitlementsInherit;
+  }
+  if (mac.hardenedRuntime != undefined) {
+    config.hardenedRuntime = mac.hardenedRuntime;
+  }
+  if (mac.gatekeeperAssess != undefined) {
+    config.gatekeeperAssess = mac.gatekeeperAssess;
+  }
+  return config;
+}
+
+function nsisConfig(options: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (options == undefined) {
+    return {};
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(options)) {
+    if (key !== "guid" && key !== "artifactName") {
+      result[key] = value;
     }
-  };
+  }
+  return result;
 }
 
-function windowsBuilderConfig(
-  contract: ReleaseContract,
-  target: "windows-nsis" | "windows-nsis-web"
+function windowsBuilder(
+  input: Extract<PackageInput, { platform: "windows" }>,
+  target: "windows-nsis" | "windows-nsis-web",
+  repository: string,
+  tag: string,
+  timestampUrl: string
 ): Record<string, unknown> {
-  const common = commonBuilderConfig(contract);
-  const artifactName = contract.application.identity.artifactName;
-  const windows = {
+  const windows = input.windows;
+  const win: Record<string, unknown> = {
     target: [
       {
         target: target === "windows-nsis" ? "nsis" : "nsis-web",
-        arch: [contract.application.windows.architecture]
+        arch: [windows.architecture]
       }
     ],
-    executableName: contract.application.windows.executableName,
-    publisherName: contract.application.windows.publisherName
-  };
-  if (target === "windows-nsis") {
-    return {
-      ...common,
-      win: windows,
-      nsis: {
-        guid: contract.application.windows.guid,
-        artifactName: `${artifactName}-Setup-\${version}.\${ext}`
-      }
-    };
-  }
-  return {
-    ...common,
-    win: windows,
-    nsisWeb: {
-      guid: contract.application.windows.guid,
-      artifactName: `${artifactName}-WebSetup-\${version}.\${ext}`,
-      publish: {
-        ...githubPublishConfiguration(contract),
-        publishAutoUpdate: false
-      }
+    executableName: windows.executableName,
+    signtoolOptions: {
+      timeStampServer: timestampUrl,
+      rfc3161TimeStampServer: timestampUrl
     }
   };
-}
-
-function writeNewFile(output: CreatedOutput, name: string, contents: string): void {
-  writeExclusiveFile(output, name, Buffer.from(contents));
+  if (windows.icon != undefined) {
+    win.icon = windows.icon;
+  }
+  const publisherName = globalPublisherName();
+  if (publisherName != undefined) {
+    if (windows.publisherName != undefined && windows.publisherName !== publisherName) {
+      throw new Error("package inputのpublisherNameとglobal signing displayNameが一致しません");
+    }
+    win.publisherName = publisherName;
+  } else if (windows.publisherName != undefined) {
+    throw new Error("package projectのpublisherNameにglobal signing displayNameがありません");
+  }
+  const sourceOptions = target === "windows-nsis" ? windows.nsis : windows.nsisWeb;
+  const selectedOptions = nsisConfig(sourceOptions);
+  const guid = windows.guid ?? sourceOptions?.guid;
+  if (guid != undefined) {
+    selectedOptions.guid = guid;
+  }
+  const artifactName = sourceOptions?.artifactName ?? windows.artifactName;
+  if (artifactName != undefined) {
+    selectedOptions.artifactName = artifactName;
+  }
+  const result: Record<string, unknown> = { ...commonBuilder(input), win };
+  if (target === "windows-nsis") {
+    result.nsis = selectedOptions;
+  } else {
+    result.nsisWeb = {
+      ...selectedOptions
+    };
+  }
+  result.publish = genericPublish(repository, tag, target === "windows-nsis");
+  return result;
 }
 
 function buildProject(
-  rootDirectory: string,
-  contract: ReleaseContract,
-  target: PackageProjectTarget,
-  output: CreatedOutput
-): ExpectedProjectFile[] {
-  const packageContents = JSON.stringify(packageJson(contract), null, 2);
-  if (packageContents === undefined) {
-    throw new Error("package.jsonを生成できません");
-  }
-  const packageFile = { name: "package.json", contents: Buffer.from(`${packageContents}\n`) };
-  if (target === "macos") {
-    const macEntitlements = readMacEntitlements(rootDirectory, contract, output.target.outputPath);
-    const builderContents = stringifyYaml(macBuilderConfig(contract, macEntitlements));
-    const expectedFiles: ExpectedProjectFile[] = [
-      packageFile,
-      { name: "electron-builder.yml", contents: Buffer.from(builderContents) },
-      {
-        name: MAC_ENTITLEMENTS_FILE,
-        contents: macEntitlements.entitlementsFile.contents
-      },
-      {
-        name: MAC_ENTITLEMENTS_INHERIT_FILE,
-        contents: macEntitlements.entitlementsInheritFile.contents
-      }
-    ];
-    writeNewFile(output, packageFile.name, `${packageContents}\n`);
-    writeNewFile(output, "electron-builder.yml", builderContents);
-    writeExclusiveFile(output, MAC_ENTITLEMENTS_FILE, macEntitlements.entitlementsFile.contents);
-    writeExclusiveFile(
-      output,
-      MAC_ENTITLEMENTS_INHERIT_FILE,
-      macEntitlements.entitlementsInheritFile.contents
-    );
-    assertCentralFileUnchanged(macEntitlements.entitlementsFile);
-    assertCentralFileUnchanged(macEntitlements.entitlementsInheritFile);
-    verifyProjectFiles(output, expectedFiles);
-    return expectedFiles;
-  }
-  const builderContents = stringifyYaml(windowsBuilderConfig(contract, target));
-  const expectedFiles: ExpectedProjectFile[] = [
-    packageFile,
-    { name: "electron-builder.yml", contents: Buffer.from(builderContents) }
-  ];
-  writeNewFile(output, packageFile.name, `${packageContents}\n`);
-  writeNewFile(output, "electron-builder.yml", builderContents);
-  verifyProjectFiles(output, expectedFiles);
-  return expectedFiles;
-}
-
-function isPackageProjectTarget(value: string): value is PackageProjectTarget {
-  return value === "macos" || value === "windows-nsis" || value === "windows-nsis-web";
-}
-
-/** prepackaged用の一target package projectを生成します。 */
-export function createPackageProject(
-  rootDirectory: string,
-  releaseContractValue: unknown,
-  target: PackageProjectTarget,
-  outputDirectory: string
-): void;
-export function createPackageProject(
-  releaseContractValue: unknown,
-  target: PackageProjectTarget,
-  outputDirectory: string
-): void;
-export function createPackageProject(
-  first: unknown,
-  second: unknown,
-  third: string,
-  fourth?: string
+  inputRoot: string,
+  outputRoot: string,
+  input: PackageInput,
+  request: PackageProjectRequest,
+  repository: string,
+  tag: string
 ): void {
-  let rootDirectory: string;
-  let releaseContractValue: unknown;
-  let targetValue: unknown;
-  let outputDirectory: string;
-  if (fourth === undefined) {
-    rootDirectory = process.cwd();
-    releaseContractValue = first;
-    targetValue = second;
-    outputDirectory = third;
+  writeExclusive(join(outputRoot, "package.json"), packageJson(input));
+  let config: Record<string, unknown>;
+  if (request.target === "macos") {
+    if (input.platform !== "macos") {
+      throw new Error("macos targetにはmacos package inputが必要です");
+    }
+    config = {
+      ...commonBuilder(input),
+      publish: genericPublish(repository, tag, true),
+      mac: macBuilder(input)
+    };
   } else {
-    if (typeof first !== "string") {
-      throw new Error("root directoryが不正です");
+    if (input.platform !== "windows") {
+      throw new Error("Windows targetにはwindows package inputが必要です");
     }
-    rootDirectory = first;
-    releaseContractValue = second;
-    targetValue = third;
-    outputDirectory = fourth;
+    config = windowsBuilder(input, request.target, repository, tag, request.timestampUrl);
   }
-  if (typeof targetValue !== "string" || !isPackageProjectTarget(targetValue)) {
-    throw new Error("targetはmacos、windows-nsis、windows-nsis-webのいずれかです");
+  const builderContents = stringifyYaml(config);
+  writeExclusive(join(outputRoot, "electron-builder.yml"), builderContents);
+  if (request.target === "macos" && input.platform === "macos") {
+    if (input.macos.entitlements != undefined) {
+      copyInputFile(
+        inputRoot,
+        input.macos.entitlements,
+        join(outputRoot, MAC_ENTITLEMENTS_FILE),
+        "entitlements"
+      );
+    }
+    if (input.macos.entitlementsInherit != undefined) {
+      copyInputFile(
+        inputRoot,
+        input.macos.entitlementsInherit,
+        join(outputRoot, MAC_ENTITLEMENTS_INHERIT_FILE),
+        "entitlementsInherit"
+      );
+    }
+  } else if (request.target !== "macos" && input.platform === "windows") {
+    if (input.windows.icon != undefined) {
+      copyInputFile(
+        inputRoot,
+        input.windows.icon,
+        join(outputRoot, input.windows.icon),
+        "win.icon"
+      );
+    }
   }
-  const releaseContract = assertReleaseContractCurrent(rootDirectory, releaseContractValue);
-  const parsedContract = parseReleaseContract(releaseContract);
-  const outputTarget = prepareOutputTarget(outputDirectory);
-  const output = createOutputDirectory(outputTarget);
+}
+
+/** package-inputから署名用の一時package projectを生成します。 */
+export function createPackageProject(request: PackageProjectRequest): void {
+  if (
+    typeof request.packageInputDirectory !== "string" ||
+    request.packageInputDirectory.length === 0
+  ) {
+    throw new Error("package-input-directoryが不正です");
+  }
+  if (typeof request.outputDirectory !== "string" || request.outputDirectory.length === 0) {
+    throw new Error("output-directoryが不正です");
+  }
+  const inputRoot = resolve(request.packageInputDirectory);
+  assertDirectory(inputRoot, "package-input directoryがディレクトリではありません");
+  const input = parsePackageInput(readJson(join(inputRoot, "package-input.json")));
+  validateInputPlatform(input, request.target);
+  const outputRoot = createOutputDirectory(request.outputDirectory);
   try {
-    const expectedFiles = buildProject(rootDirectory, parsedContract, targetValue, output);
-    assertCreatedOutput(output);
-    assertRealPathWithin(
-      output.target.parentRealPath,
-      output.target.outputPath,
-      "公開済みoutputが物理親path外です"
-    );
-    let requestedRealPath: string;
-    let outputRealPath: string;
-    try {
-      requestedRealPath = realpathSync(output.target.requestedPath);
-      outputRealPath = realpathSync(output.target.outputPath);
-    } catch (error) {
-      throw new Error(`公開済みoutputのrealpathを確認できません: ${output.target.outputPath}`, {
-        cause: error
-      });
-    }
-    if (resolve(requestedRealPath) !== resolve(outputRealPath)) {
-      throw new Error(`公開済みoutputのrealpathが一致しません: ${output.target.requestedPath}`);
-    }
-    verifyProjectFiles(output, expectedFiles);
+    buildProject(inputRoot, outputRoot, input, request, request.repository, request.tag);
   } catch (error) {
-    cleanupCreatedOutput(error, output);
+    try {
+      rmSync(outputRoot, { recursive: true });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "package project生成とcleanupに失敗しました");
+    }
+    throw error;
   }
 }

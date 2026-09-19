@@ -7,10 +7,6 @@ param(
     [string] $CertificatePath,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet('CurrentUser', 'LocalMachine')]
-    [string] $Scope,
-
-    [Parameter(Mandatory = $true)]
     [ValidatePattern('^[0-9A-Fa-f]{40}$')]
     [string] $Fingerprint
 )
@@ -70,7 +66,7 @@ try {
     }
 
     try {
-        $storeLocation = [System.Security.Cryptography.X509Certificates.StoreLocation]::$Scope
+        $storeLocation = [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
         $rootStore = New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Store -ArgumentList @('Root', $storeLocation)
         $trustedPublisherStore = New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Store -ArgumentList @('TrustedPublisher', $storeLocation)
         $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
@@ -82,18 +78,18 @@ try {
         if ($rootMatches.Count -eq 0) {
             $rootStore.Add($certificate)
             $addedToRoot = $true
-            Write-Output "Rootへ登録しました: $Scope"
+            Write-Output 'Rootへ登録しました: CurrentUser'
         } else {
-            Write-Output "Rootは同一fingerprintのため変更しません: $Scope"
+            Write-Output 'Rootは同一fingerprintのため変更しません: CurrentUser'
         }
 
         $trustedPublisherMatches = @($trustedPublisherStore.Certificates | Where-Object { $_.Thumbprint.ToUpperInvariant() -ceq $expectedFingerprint })
         if ($trustedPublisherMatches.Count -eq 0) {
             $trustedPublisherStore.Add($certificate)
             $addedToTrustedPublisher = $true
-            Write-Output "TrustedPublisherへ登録しました: $Scope"
+            Write-Output 'TrustedPublisherへ登録しました: CurrentUser'
         } else {
-            Write-Output "TrustedPublisherは同一fingerprintのため変更しません: $Scope"
+            Write-Output 'TrustedPublisherは同一fingerprintのため変更しません: CurrentUser'
         }
 
         Write-Output '証明書のsubject名だけを使った代替検索は行いません。'
@@ -124,7 +120,7 @@ try {
             }
             throw [System.AggregateException]::new('信頼ストア登録に失敗し、変更の取り消しにも失敗しました。', $allExceptions)
         }
-        throw [System.InvalidOperationException]::new('信頼ストア登録に失敗しました。LocalMachineでは管理者権限が必要です。', $originalException)
+        throw [System.InvalidOperationException]::new('CurrentUserの信頼ストア登録に失敗しました。', $originalException)
     }
 } finally {
     if ($trustedPublisherStoreOpened) {

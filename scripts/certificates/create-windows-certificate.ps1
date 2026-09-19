@@ -142,16 +142,6 @@ try {
     if ($reimportedThumbprint -cne $createdCertificateThumbprint) {
         throw 'PFX再import後のthumbprintが一致しません。'
     }
-    $reimportedEkuExtension = @($reimportedCertificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' }) | Select-Object -First 1
-    if ($null -eq $reimportedEkuExtension) {
-        throw 'PFX再import後の証明書にEnhanced Key Usageがありません。'
-    }
-    $reimportedEnhancedKeyUsage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($reimportedEkuExtension, $false)
-    $reimportedHasCodeSigning = @($reimportedEnhancedKeyUsage.EnhancedKeyUsages | Where-Object { $_.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
-    if (-not $reimportedHasCodeSigning) {
-        throw 'PFX再import後の証明書にCode Signing EKUがありません。'
-    }
-
     $sha256Fingerprint = (Get-FileHash -LiteralPath $tempCertificatePath -Algorithm SHA256 -ErrorAction Stop).Hash.ToUpperInvariant()
     $fingerprintText = @(
         "subject=$Subject"

@@ -27,15 +27,15 @@ sha256_fingerprint=...
 validity_days=...
 ```
 
-Windows版の年数行は `validity_years` です。Windowsのtrust導入にはSHA-1値を使い、中央設定やCIの公開fingerprintにはSHA-256値を使います。
+Windows版の年数行は `validity_years` です。Windowsのtrust導入にはSHA-1値を使い、中央設定のfingerprintにはSHA-256値を使います。
 
-Windowsで公開証明書をRootとTrustedPublisherへ導入する場合は、SHA-1 fingerprintを完全一致で指定します。
+Windowsで公開証明書をCurrentUserのRootとTrustedPublisherへ導入する場合は、SHA-1 fingerprintを完全一致で指定します。
 
 ```powershell
-./scripts/certificates/install-windows-trust.ps1 -CertificatePath certificate.cer -Scope CurrentUser -Fingerprint SHA1_FINGERPRINT
+./scripts/certificates/install-windows-trust.ps1 -CertificatePath certificate.cer -Fingerprint SHA1_FINGERPRINT
 ```
 
-`LocalMachine` は管理者権限が必要です。同一fingerprintはno-opとし、同名の別証明書は対象にしません。SmartScreenやSmart App Controlは変更しません。
+登録対象は現在の利用者だけで、管理者権限は不要です。同一fingerprintはno-opとし、同名の別証明書は対象にしません。SmartScreenやSmart App Controlは変更しません。
 
 秘密鍵を別のPCや利用者へ配布せず、P12またはPFXとパスワードは本人だけがアクセスできる保管場所に置きます。公開証明書だけを端末やリポジトリへ配布します。
 
