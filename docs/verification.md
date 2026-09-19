@@ -16,7 +16,7 @@
 | ソース固定 | macOS と Windows が同じ source SHA を checkout し、公開前に tag が移動していれば停止する |
 | ビルド | source で frozen install、build、electron-builder が成功し、source の設定と hook が成果物へ反映される |
 | macOS 署名 | electron-builder の署名が成功し、ZIP、blockmap、更新 metadata が生成される |
-| Windows 署名 | electron-builder の署名が成功し、通常 NSIS、blockmap、更新 metadata、NSIS Web、7z package が生成される |
+| Windows 署名 | electron-builder の署名が成功し、通常 NSIS、blockmap、channel に対応する root metadata、NSIS Web installer、`.nsis.7z` package が生成される |
 | 成果物選択 | 余分な builder 出力を公開せず、必須 asset が一意に選ばれる |
 | 更新 metadata | 実ファイルの参照、サイズ、Base64 の SHA-512、blockmap size、version が一致する |
 | 公開先 | 既存かつ変更可能な Release だけを変更し、Release の本文などを編集しない |

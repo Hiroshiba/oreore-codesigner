@@ -22,8 +22,9 @@
 ## ソース設定の扱い
 
 electron-builder の appId、version、productName、GUID、publisher、icon、entitlements、artifactName、NSIS 設定、hook はソース側の設定を正本として直接使います。
-中央で `package-input.json` や一時 package project を生成したり、ソース設定を再構築したりしません。
-`electron-builder` の CLI には OS、x64、出力先、`forceCodeSigning`、Release の generic publish URL だけを渡します。
+中央は対象ソースの設定を再構築せず、ソース側の electron-builder 設定を直接読み込ませます。
+`electron-builder` の CLI には OS、x64、出力先、root と platform の署名強制、root と platform・target の対象 Release 用 generic publish URL だけを上書きします。
+NSIS Web の `appPackageUrl` は中央の target publish URLから実際の package 名を補わせるため `null` にします。
 
 macOS は electron-builder に `CSC_LINK`、`CSC_KEY_PASSWORD` と必要な `CSC_NAME` を渡し、一時 keychain の作成と削除を任せます。
 Windows は `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` だけを使い、中央で SignTool を呼んだり `.dll` や `.node` を総当たりで再署名したりしません。
@@ -31,8 +32,8 @@ Windows は `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` だけを使い、中央で 
 
 ## 成果物と公開
 
-macOS は ZIP、blockmap、更新 metadata を生成します。
-Windows は通常 NSIS の installer、blockmap、更新 metadata と、NSIS Web の installer、7z package を生成します。
+macOS は ZIP、blockmap、channel に対応する root の `*-mac.yml` 更新 metadata を生成します。
+Windows は通常 NSIS の installer、blockmap、channel に対応する root の更新 metadata と、`nsis-web` 配下の installer、`.nsis.7z` package を生成します。
 通常 NSIS の metadata は通常 installer を参照し、NSIS Web の成果物は初回導入に使います。
 builder の余分な出力は公開対象へ選びません。
 

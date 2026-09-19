@@ -90,8 +90,16 @@ try {
       --publish never `
       "--config.directories.output=$builderOutput" `
       --config.forceCodeSigning=true `
+      --config.win.forceCodeSigning=true `
       --config.publish.provider=generic `
-      "--config.publish.url=$publishUrl"
+      "--config.publish.url=$publishUrl" `
+      --config.win.publish.provider=generic `
+      "--config.win.publish.url=$publishUrl" `
+      --config.nsis.publish.provider=generic `
+      "--config.nsis.publish.url=$publishUrl" `
+      --config.nsisWeb.publish.provider=generic `
+      "--config.nsisWeb.publish.url=$publishUrl" `
+      --config.nsisWeb.appPackageUrl=null
     Assert-ExternalSuccess 'sourceのelectron-builder実行に失敗しました'
   } finally {
     Pop-Location
@@ -103,21 +111,19 @@ try {
   $normalBlockmaps = @(Get-ChildItem -LiteralPath $builderOutput -File -Force -ErrorAction Stop | Where-Object {
       $_.Extension -ieq '.blockmap' -and (Test-Path -LiteralPath ($_.FullName -replace '\.blockmap$', '') -PathType Leaf)
     })
-  $metadataPath = Join-Path $builderOutput 'latest.yml'
-  $metadataFiles = @()
-  if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
-    $metadataFiles = @(Get-Item -LiteralPath $metadataPath -Force -ErrorAction Stop)
-  }
+  $metadataFiles = @(Get-ChildItem -LiteralPath $builderOutput -File -Force -ErrorAction Stop | Where-Object {
+      $_.Extension -ieq '.yml' -and $_.Name -notmatch '(?i)-mac\.yml$'
+    })
   $webDirectory = Join-Path $builderOutput 'nsis-web'
   Assert-Directory $webDirectory 'NSIS Web output directoryがありません' | Out-Null
   $webInstallers = @(Get-ChildItem -LiteralPath $webDirectory -File -Force -ErrorAction Stop | Where-Object {
-      $_.Extension -ieq '.exe' -and (Test-Path -LiteralPath ($_.FullName + '.7z') -PathType Leaf)
+      $_.Extension -ieq '.exe'
     })
   $webPackages = @(Get-ChildItem -LiteralPath $webDirectory -File -Force -ErrorAction Stop | Where-Object {
-      $_.Extension -ieq '.7z' -and (Test-Path -LiteralPath ($_.FullName -replace '\.7z$', '') -PathType Leaf)
-    })
+      $_.Name -match '(?i)\.nsis\.7z$'
+  })
   if ($normalInstallers.Count -ne 1 -or $normalBlockmaps.Count -ne 1 -or $metadataFiles.Count -ne 1 -or $webInstallers.Count -ne 1 -or $webPackages.Count -ne 1) {
-    throw 'Windows packageの通常NSIS、blockmap、metadata、NSIS Web、7zが揃っていません'
+    throw 'Windows packageの通常NSIS、blockmap、metadata、NSIS Web、.nsis.7zが揃っていません'
   }
 
   $payloadDirectory = Join-Path $releaseItem.FullName 'payload'

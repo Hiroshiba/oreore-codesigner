@@ -71,7 +71,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-macos_configured=$(jq -er '.macos.configured' "$central_root/config/signing.json")
+macos_configured=$(jq -r '.macos.configured | select(type == "boolean") | tostring' "$central_root/config/signing.json")
+if [[ -z "$macos_configured" ]]; then
+  printf '%s\n' 'macOS signing設定のconfiguredがbooleanではありません' >&2
+  exit 1
+fi
 if [[ "$macos_configured" == true ]]; then
   export CSC_NAME
   CSC_NAME=$(jq -er '.macos.displayName' "$central_root/config/signing.json")
@@ -99,18 +103,23 @@ mkdir -p -- "$builder_output"
     --publish never \
     "--config.directories.output=$builder_output" \
     --config.forceCodeSigning=true \
+    --config.mac.forceCodeSigning=true \
     --config.publish.provider=generic \
-    "--config.publish.url=$publish_url"
+    "--config.publish.url=$publish_url" \
+    --config.mac.publish.provider=generic \
+    "--config.mac.publish.url=$publish_url"
 )
 
 shopt -s nullglob
 zip_files=("$builder_output"/*.zip)
 blockmap_files=("$builder_output"/*.blockmap)
-shopt -u nullglob
 metadata_entries=()
-if [[ -f "$builder_output/latest-mac.yml" ]]; then
-  metadata_entries=("$builder_output/latest-mac.yml")
-fi
+for metadata_path in "$builder_output"/*-mac.yml; do
+  if [[ -f "$metadata_path" && ! -L "$metadata_path" ]]; then
+    metadata_entries+=("$metadata_path")
+  fi
+done
+shopt -u nullglob
 zip_entries=()
 blockmap_entries=()
 for zip_path in "${zip_files[@]}"; do
