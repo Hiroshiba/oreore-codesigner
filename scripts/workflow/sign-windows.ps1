@@ -120,19 +120,19 @@ function Assert-CodeSigningCertificate(
 ) {
   $actualFingerprint = $Certificate.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToUpperInvariant()
   if ($actualFingerprint -cne $Fingerprint) {
-    throw "$LabelのSHA-256 fingerprintが一致しません"
+    throw "${Label}のSHA-256 fingerprintが一致しません"
   }
   $actualCommonName = $Certificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
   if ($actualCommonName -cne $CommonName) {
-    throw "$LabelのCNが一致しません"
+    throw "${Label}のCNが一致しません"
   }
   $ekuExtension = @($Certificate.Extensions | Where-Object { $_.Oid.Value -ceq '2.5.29.37' }) | Select-Object -First 1
   if ($null -eq $ekuExtension) {
-    throw "$LabelにCode Signing EKUがありません"
+    throw "${Label}にCode Signing EKUがありません"
   }
   $enhancedKeyUsage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($ekuExtension, $false)
   if (@($enhancedKeyUsage.EnhancedKeyUsages | Where-Object { $_.Value -ceq '1.3.6.1.5.5.7.3.3' }).Count -eq 0) {
-    throw "$LabelにCode Signing EKUがありません"
+    throw "${Label}にCode Signing EKUがありません"
   }
 }
 
@@ -257,19 +257,19 @@ function Get-TargetOutputs([string]$DistDirectory, [string]$Target) {
   Assert-Directory $DistDirectory 'electron-builderのdistがありません' | Out-Null
   $entries = @(Get-ChildItem -LiteralPath $DistDirectory -Force -ErrorAction Stop)
   if ($entries.Count -eq 0) {
-    throw "$Targetの出力がありません"
+    throw "${Target}の出力がありません"
   }
   foreach ($entry in $entries) {
     if ($entry -isnot [System.IO.FileInfo] -or ($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-      throw "$Targetの出力に通常file以外があります: $($entry.FullName)"
+      throw "${Target}の出力に通常file以外があります: $($entry.FullName)"
     }
     if ($entry.Length -eq 0) {
-      throw "$Targetの出力が空です: $($entry.Name)"
+      throw "${Target}の出力が空です: $($entry.Name)"
     }
   }
   $executables = @($entries | Where-Object { $_.Extension -ieq '.exe' })
   if ($executables.Count -ne 1) {
-    throw "$Targetのexe出力が一件ではありません"
+    throw "${Target}のexe出力が一件ではありません"
   }
   $result = [ordered]@{ Installer = $executables[0] }
   if ($Target -ceq 'windows-nsis') {
@@ -294,7 +294,7 @@ function Get-TargetOutputs([string]$DistDirectory, [string]$Target) {
     [void]$known.Add($value.FullName)
   }
   if ($known.Count -ne $entries.Count) {
-    throw "$Targetの出力に想定外fileがあります"
+    throw "${Target}の出力に想定外fileがあります"
   }
   return [pscustomobject]$result
 }
