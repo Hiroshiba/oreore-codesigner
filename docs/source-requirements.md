@@ -13,7 +13,7 @@
 | `electron-builder.yml` または `electron-builder.yaml` | `appId`、`productName`、macOS と Windows の対象設定 |
 
 `packageManager` は `pnpm@10.30.2` のようにアプリが使う pnpm の exact spec を固定します。
-`electron-builder` は 26.16.1 を依存関係へ exact に指定し、`scripts.build` を必須にします。
+`electron-builder` は `devDependencies` にだけ 26.16.1 を exact に指定し、`dependencies`、`optionalDependencies`、`peerDependencies` には配置せず、`scripts.build` を必須にします。
 `electron-builder.yml` と `electron-builder.yaml` はどちらか一つだけを置き、`extends` と `package.json` の `build` フィールドは使いません。
 root、`mac`、`win`、`nsis`、`nsisWeb` とその target の `publish` は設定しません。
 

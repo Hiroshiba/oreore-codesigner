@@ -13,6 +13,7 @@ const targetSettingsSchema = z
   .passthrough();
 const targetSchema = z.union([
   z.string(),
+  z.null(),
   targetSettingsSchema,
   z.array(z.union([z.string(), targetSettingsSchema]))
 ]);
@@ -43,6 +44,8 @@ const packageJsonSchema = z
       })
       .passthrough(),
     dependencies: z.record(z.string()).optional(),
+    optionalDependencies: z.record(z.string()).optional(),
+    peerDependencies: z.record(z.string()).optional(),
     devDependencies: z.record(z.string()).optional(),
     build: z.never().optional()
   })
@@ -77,7 +80,16 @@ function readPackageJson(sourceDirectory: string): PackageJson {
 }
 
 function assertElectronBuilder(packageJson: PackageJson): void {
-  if (packageJson.dependencies?.["electron-builder"] != undefined) {
+  const productionDependencySections = [
+    packageJson.dependencies,
+    packageJson.optionalDependencies,
+    packageJson.peerDependencies
+  ];
+  if (
+    productionDependencySections.some(
+      (dependencies) => dependencies?.["electron-builder"] != undefined
+    )
+  ) {
     throw new Error("electron-builderはdevDependenciesにだけ配置してください");
   }
   if (packageJson.devDependencies?.["electron-builder"] !== "26.16.1") {
