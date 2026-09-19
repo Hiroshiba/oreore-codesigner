@@ -1,5 +1,5 @@
 import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -11,7 +11,9 @@ import {
   parseExecutableName,
   parsePackageManager,
   parseSemVer,
-  parseRelativePath
+  parseRelativePath,
+  parseWindowsIconFile,
+  type WindowsIconFile
 } from "./schema.js";
 import {
   assertNoSymlinkAncestors,
@@ -21,11 +23,35 @@ import {
 
 export type PackageInputPlatform = "macos" | "windows";
 
+const sourceAuthorSchema = z.union([
+  z.string(),
+  z
+    .object({
+      name: z.string().optional(),
+      email: z.string().optional(),
+      url: z.string().optional()
+    })
+    .strict()
+]);
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number().finite(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(jsonValueSchema)
+  ])
+);
+
 const sourcePackageSchema = z
   .object({
     name: z.string(),
     version: z.string(),
-    packageManager: z.string()
+    packageManager: z.string(),
+    description: z.string().optional(),
+    author: sourceAuthorSchema.optional()
   })
   .passthrough();
 
@@ -53,6 +79,7 @@ const sourceWinSchema = z
   .object({
     target: targetListSchema.optional(),
     executableName: z.string().optional(),
+    icon: z.string().optional(),
     publisherName: z.string().optional(),
     artifactName: z.string().optional()
   })
@@ -78,7 +105,8 @@ const sourceNsisSchema = z
     deleteAppDataOnUninstall: z.boolean().optional(),
     runAfterFinish: z.boolean().optional(),
     artifactName: z.string().optional(),
-    guid: z.string().optional()
+    guid: z.string().optional(),
+    publish: jsonValueSchema.optional()
   })
   .strict();
 const sourceBuilderSchema = z
@@ -86,6 +114,7 @@ const sourceBuilderSchema = z
     appId: z.string().optional(),
     productName: z.string().optional(),
     artifactName: z.string().optional(),
+    copyright: z.string().optional(),
     mac: sourceMacSchema.optional(),
     win: sourceWinSchema.optional(),
     nsis: sourceNsisSchema.optional(),
@@ -96,6 +125,12 @@ const sourceBuilderSchema = z
 type SourceNsis = z.infer<typeof sourceNsisSchema>;
 type SourceMac = z.infer<typeof sourceMacSchema>;
 type SourceWin = z.infer<typeof sourceWinSchema>;
+type SourcePackage = {
+  name: string;
+  version: string;
+  description?: string;
+  author?: z.infer<typeof sourceAuthorSchema>;
+};
 type WindowsPackageInput = Extract<PackageInput, { platform: "windows" }>;
 type MacosPackageInput = Extract<PackageInput, { platform: "macos" }>;
 type PackageNsisOptions = NonNullable<WindowsPackageInput["windows"]["nsis"]>;
@@ -141,6 +176,7 @@ type ParsedSourceBuilder = {
   appId: string;
   productName: string;
   artifactName?: string;
+  copyright?: string;
   mac?: SourceMac;
   win?: SourceWin;
   nsis?: SourceNsis;
@@ -237,7 +273,7 @@ function findBuilderPath(sourceRoot: string): string {
   return path;
 }
 
-function parseSourcePackage(path: string): { name: string; version: string } {
+function parseSourcePackage(path: string): SourcePackage {
   const value = sourcePackageSchema.parse(readJson(path));
   if (Object.hasOwn(value, "build")) {
     throw new Error("package.json.buildとの二重定義は許可されません");
@@ -248,7 +284,12 @@ function parseSourcePackage(path: string): { name: string; version: string } {
     .parse(value.name);
   const version = parseSemVer(value.version);
   parsePackageManager(value.packageManager);
-  return { name, version };
+  return {
+    name,
+    version,
+    ...(value.description == undefined ? {} : { description: value.description }),
+    ...(value.author == undefined ? {} : { author: value.author })
+  };
 }
 
 function parseSourceBuilder(path: string): ParsedSourceBuilder {
@@ -260,6 +301,7 @@ function parseSourceBuilder(path: string): ParsedSourceBuilder {
     appId: parseAppId(value.appId),
     productName: sourceProductNameSchema.parse(value.productName),
     ...(value.artifactName == undefined ? {} : { artifactName: value.artifactName }),
+    ...(value.copyright == undefined ? {} : { copyright: value.copyright }),
     ...(value.mac == undefined ? {} : { mac: value.mac }),
     ...(value.win == undefined ? {} : { win: value.win }),
     ...(value.nsis == undefined ? {} : { nsis: value.nsis }),
@@ -304,14 +346,19 @@ function resolveArchitecture(
   return architecture;
 }
 
-function copyInputFile(sourceRoot: string, sourceRelativePath: string, outputPath: string): void {
+function copyInputFile(
+  sourceRoot: string,
+  sourceRelativePath: string,
+  outputPath: string,
+  label: string
+): void {
   const sourcePath = resolve(sourceRoot, sourceRelativePath);
-  assertRealPathWithin(sourceRoot, sourcePath, "entitlementsがsource root外を参照しています");
-  const contents = readRegularFile(sourcePath, "entitlementsがregular fileではありません");
+  assertRealPathWithin(sourceRoot, sourcePath, `${label}がsource root外を参照しています`);
+  const contents = readRegularFile(sourcePath, `${label}がregular fileではありません`);
   try {
     writeFileSync(outputPath, contents, { flag: "wx", mode: 0o600 });
   } catch (error) {
-    throw new Error(`entitlementsを書き込めません: ${outputPath}`, { cause: error });
+    throw new Error(`${label}を書き込めません: ${outputPath}`, { cause: error });
   }
 }
 
@@ -407,9 +454,44 @@ function validateMacPrepackaged(
   }
 }
 
-function validateWindowsPrepackaged(prepackagedRoot: string, executableName: string): void {
-  const executablePath = join(prepackagedRoot, `${executableName}.exe`);
-  assertRegularFile(executablePath, "prepackagedの主exeがregular fileではありません");
+function resolveWindowsExecutableName(
+  prepackagedRoot: string,
+  configuredName: string | undefined
+): string {
+  if (configuredName != undefined) {
+    const executableName = parseExecutableName(configuredName);
+    const executablePath = join(prepackagedRoot, `${executableName}.exe`);
+    assertRegularFile(executablePath, "設定済みexecutableNameの主exeがregular fileではありません");
+    return executableName;
+  }
+  const entries = readdirSync(prepackagedRoot, { withFileTypes: true });
+  const executables = entries.filter(
+    (entry) =>
+      entry.isFile() && !entry.isSymbolicLink() && entry.name.toLowerCase().endsWith(".exe")
+  );
+  if (executables.length !== 1) {
+    throw new Error("prepackaged directory直下のexeを一件に確定できません");
+  }
+  const executable = executables[0];
+  if (executable == undefined) {
+    throw new Error("prepackaged directory直下のexeを確定できません");
+  }
+  const executableName = parseExecutableName(executable.name.slice(0, -4));
+  assertRegularFile(join(prepackagedRoot, executable.name), "主exeがregular fileではありません");
+  return executableName;
+}
+
+function windowsIconFile(sourcePath: string): WindowsIconFile {
+  const extension = extname(parseRelativePath(sourcePath)).toLowerCase();
+  if (
+    extension !== ".ico" &&
+    extension !== ".png" &&
+    extension !== ".svg" &&
+    extension !== ".icns"
+  ) {
+    throw new Error("win.iconはico、png、svg、icnsのいずれかの拡張子が必要です");
+  }
+  return parseWindowsIconFile(`icon${extension}`);
 }
 
 function nsisOptions(value: SourceNsis | undefined): PackageNsisOptions | undefined {
@@ -471,7 +553,7 @@ function parseOptionalArtifactName(value: string | undefined): string | undefine
 
 function buildMacInput(
   sourceRoot: string,
-  sourcePackage: { name: string; version: string },
+  sourcePackage: SourcePackage,
   builder: ParsedSourceBuilder,
   prepackagedRoot: string,
   outputRoot: string
@@ -486,7 +568,7 @@ function buildMacInput(
   if (entitlements != undefined) {
     const sourcePath = resolve(sourceRoot, parseRelativePath(entitlements));
     assertRealPathWithin(sourceRoot, sourcePath, "entitlementsがsource root外を参照しています");
-    copyInputFile(sourceRoot, entitlements, join(outputRoot, "entitlements.plist"));
+    copyInputFile(sourceRoot, entitlements, join(outputRoot, "entitlements.plist"), "entitlements");
   }
   if (entitlementsInherit != undefined) {
     const sourcePath = resolve(sourceRoot, parseRelativePath(entitlementsInherit));
@@ -495,7 +577,12 @@ function buildMacInput(
       sourcePath,
       "entitlementsInheritがsource root外を参照しています"
     );
-    copyInputFile(sourceRoot, entitlementsInherit, join(outputRoot, "entitlements-inherit.plist"));
+    copyInputFile(
+      sourceRoot,
+      entitlementsInherit,
+      join(outputRoot, "entitlements-inherit.plist"),
+      "entitlementsInherit"
+    );
   }
   const artifactName = parseOptionalArtifactName(mac?.artifactName ?? builder.artifactName);
   const macosOptions: MacosPackageInput["macos"] = {
@@ -512,6 +599,9 @@ function buildMacInput(
     platform: "macos",
     name: sourcePackage.name,
     version: sourcePackage.version,
+    ...(sourcePackage.description == undefined ? {} : { description: sourcePackage.description }),
+    ...(sourcePackage.author == undefined ? {} : { author: sourcePackage.author }),
+    ...(builder.copyright == undefined ? {} : { copyright: builder.copyright }),
     appId,
     productName,
     macos: macosOptions
@@ -520,22 +610,25 @@ function buildMacInput(
 }
 
 function buildWindowsInput(
-  sourcePackage: { name: string; version: string },
+  sourceRoot: string,
+  sourcePackage: SourcePackage,
   builder: ParsedSourceBuilder,
-  prepackagedRoot: string
+  prepackagedRoot: string,
+  outputRoot: string
 ): PackageInput {
   const win = builder.win;
-  if (win == undefined || win.executableName == undefined) {
-    throw new Error("WindowsのexecutableNameが必要です");
-  }
   const appId = builder.appId;
   const productName = builder.productName;
-  const architecture = resolveArchitecture(win.target, "windows");
+  const architecture = resolveArchitecture(win?.target, "windows");
   if (architecture !== "x64") {
     throw new Error("Windows architectureはx64でなければなりません");
   }
-  const executableName = parseExecutableName(win.executableName);
-  validateWindowsPrepackaged(prepackagedRoot, executableName);
+  const executableName = resolveWindowsExecutableName(prepackagedRoot, win?.executableName);
+  const icon = win?.icon;
+  const iconFile = icon == undefined ? undefined : windowsIconFile(icon);
+  if (iconFile != undefined && icon != undefined) {
+    copyInputFile(sourceRoot, icon, join(outputRoot, iconFile), "win.icon");
+  }
   const nsis = nsisOptions(builder.nsis);
   const nsisWeb = nsisOptions(builder.nsisWeb);
   const nsisGuid =
@@ -546,9 +639,9 @@ function buildWindowsInput(
     throw new Error("NSISとNSIS WebのGUIDが一致しません");
   }
   const sourceGuid = nsisGuid ?? nsisWebGuid;
-  const artifactName = parseOptionalArtifactName(win.artifactName ?? builder.artifactName);
+  const artifactName = parseOptionalArtifactName(win?.artifactName ?? builder.artifactName);
   const sourcePublisherName =
-    win.publisherName == undefined ? undefined : sourceProductNameSchema.parse(win.publisherName);
+    win?.publisherName == undefined ? undefined : sourceProductNameSchema.parse(win.publisherName);
   const configuredPublisherNameValue = globalPublisherName();
   const configuredPublisherName =
     configuredPublisherNameValue == undefined
@@ -567,6 +660,7 @@ function buildWindowsInput(
   const windowsInput: WindowsPackageInput["windows"] = {
     architecture,
     executableName,
+    ...(iconFile == undefined ? {} : { icon: iconFile }),
     ...(configuredPublisherName == undefined ? {} : { publisherName: configuredPublisherName }),
     ...(artifactName == undefined ? {} : { artifactName }),
     ...(sourceGuid == undefined
@@ -581,6 +675,9 @@ function buildWindowsInput(
     platform: "windows",
     name: sourcePackage.name,
     version: sourcePackage.version,
+    ...(sourcePackage.description == undefined ? {} : { description: sourcePackage.description }),
+    ...(sourcePackage.author == undefined ? {} : { author: sourcePackage.author }),
+    ...(builder.copyright == undefined ? {} : { copyright: builder.copyright }),
     appId,
     productName,
     windows: windowsInput
@@ -618,7 +715,7 @@ export function createPackageInput(
     const packageInput =
       platform === "macos"
         ? buildMacInput(sourceRoot, sourcePackage, builder, prepackagedRoot, outputRoot)
-        : buildWindowsInput(sourcePackage, builder, prepackagedRoot);
+        : buildWindowsInput(sourceRoot, sourcePackage, builder, prepackagedRoot, outputRoot);
     const json = JSON.stringify(packageInput, null, 2);
     if (json == undefined) {
       throw new Error("package inputを生成できません");

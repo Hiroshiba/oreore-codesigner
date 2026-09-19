@@ -113,7 +113,9 @@ function packageJson(input: PackageInput): string {
   const value = {
     name: input.name,
     version: input.version,
-    private: true
+    private: true,
+    ...(input.description == undefined ? {} : { description: input.description }),
+    ...(input.author == undefined ? {} : { author: input.author })
   };
   const contents = JSON.stringify(value, null, 2);
   if (contents == undefined) {
@@ -138,14 +140,19 @@ function genericPublish(
   };
 }
 
-function copyInputFile(inputRoot: string, relativePath: string, outputPath: string): void {
+function copyInputFile(
+  inputRoot: string,
+  relativePath: string,
+  outputPath: string,
+  label: string
+): void {
   const sourcePath = resolve(inputRoot, relativePath);
-  assertRegularFile(sourcePath, "package inputのentitlementsがregular fileではありません");
+  assertRegularFile(sourcePath, `package inputの${label}がregular fileではありません`);
   let contents: Buffer;
   try {
     contents = readFileSync(sourcePath);
   } catch (error) {
-    throw new Error(`package inputのentitlementsを読み込めません: ${sourcePath}`, { cause: error });
+    throw new Error(`package inputの${label}を読み込めません: ${sourcePath}`, { cause: error });
   }
   writeExclusive(outputPath, contents);
 }
@@ -162,7 +169,8 @@ function validateInputPlatform(input: PackageInput, target: PackageProjectTarget
 function commonBuilder(input: PackageInput): Record<string, unknown> {
   return {
     appId: input.appId,
-    productName: input.productName
+    productName: input.productName,
+    ...(input.copyright == undefined ? {} : { copyright: input.copyright })
   };
 }
 
@@ -223,6 +231,9 @@ function windowsBuilder(
       rfc3161TimeStampServer: timestampUrl
     }
   };
+  if (windows.icon != undefined) {
+    win.icon = windows.icon;
+  }
   const publisherName = globalPublisherName();
   if (publisherName != undefined) {
     if (windows.publisherName != undefined && windows.publisherName !== publisherName) {
@@ -283,13 +294,28 @@ function buildProject(
   writeExclusive(join(outputRoot, "electron-builder.yml"), builderContents);
   if (request.target === "macos" && input.platform === "macos") {
     if (input.macos.entitlements != undefined) {
-      copyInputFile(inputRoot, input.macos.entitlements, join(outputRoot, MAC_ENTITLEMENTS_FILE));
+      copyInputFile(
+        inputRoot,
+        input.macos.entitlements,
+        join(outputRoot, MAC_ENTITLEMENTS_FILE),
+        "entitlements"
+      );
     }
     if (input.macos.entitlementsInherit != undefined) {
       copyInputFile(
         inputRoot,
         input.macos.entitlementsInherit,
-        join(outputRoot, MAC_ENTITLEMENTS_INHERIT_FILE)
+        join(outputRoot, MAC_ENTITLEMENTS_INHERIT_FILE),
+        "entitlementsInherit"
+      );
+    }
+  } else if (request.target !== "macos" && input.platform === "windows") {
+    if (input.windows.icon != undefined) {
+      copyInputFile(
+        inputRoot,
+        input.windows.icon,
+        join(outputRoot, input.windows.icon),
+        "win.icon"
       );
     }
   }

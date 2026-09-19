@@ -88,6 +88,16 @@ function isValidGitRef(value: string): boolean {
 const semverSchema = z.string().regex(semverPattern, "SemVer形式で指定してください");
 const appIdSchema = z.string().regex(appIdPattern, "appIdはreverse-DNS形式で指定してください");
 const packageNameSchema = z.string().regex(packageNamePattern, "package nameが不正です");
+const packageAuthorSchema = z.union([
+  z.string(),
+  z
+    .object({
+      name: z.string().optional(),
+      email: z.string().optional(),
+      url: z.string().optional()
+    })
+    .strict()
+]);
 const repositorySchema = z
   .string()
   .regex(repositoryPattern, "repositoryはowner/name形式で指定してください");
@@ -154,6 +164,7 @@ const executableNameSchema = fileNameSchema.refine(
   (value) => !value.toLowerCase().endsWith(".exe"),
   "executableNameは拡張子なしで指定してください"
 );
+const windowsIconFileSchema = z.enum(["icon.ico", "icon.png", "icon.svg", "icon.icns"]);
 
 const signingFingerprintSchema = z
   .string()
@@ -236,6 +247,7 @@ const windowsInputSchema = z
   .object({
     architecture: z.literal("x64"),
     executableName: executableNameSchema,
+    icon: windowsIconFileSchema.optional(),
     publisherName: productNameSchema.optional(),
     artifactName: artifactNameSchema.optional(),
     guid: uuidSchema.optional(),
@@ -250,6 +262,9 @@ const packageInputSchema = z.discriminatedUnion("platform", [
       platform: z.literal("macos"),
       name: packageNameSchema,
       version: semverSchema,
+      description: z.string().optional(),
+      author: packageAuthorSchema.optional(),
+      copyright: z.string().optional(),
       appId: appIdSchema,
       productName: productNameSchema,
       macos: macosInputSchema
@@ -260,6 +275,9 @@ const packageInputSchema = z.discriminatedUnion("platform", [
       platform: z.literal("windows"),
       name: packageNameSchema,
       version: semverSchema,
+      description: z.string().optional(),
+      author: packageAuthorSchema.optional(),
+      copyright: z.string().optional(),
       appId: appIdSchema,
       productName: productNameSchema,
       windows: windowsInputSchema
@@ -293,6 +311,7 @@ export type SigningConfig = z.infer<typeof signingConfigSchema>;
 export type PackageInput = z.infer<typeof packageInputSchema>;
 export type PackageProjectTarget = "macos" | "windows-nsis" | "windows-nsis-web";
 export type UpdateMetadata = z.infer<typeof updateMetadataSchema>;
+export type WindowsIconFile = z.infer<typeof windowsIconFileSchema>;
 
 export { packageInputSchema, signingConfigSchema, updateMetadataSchema };
 
@@ -344,6 +363,11 @@ export function parseArtifactName(value: string): string {
 /** Windows executableNameを検証します。 */
 export function parseExecutableName(value: string): string {
   return executableNameSchema.parse(value);
+}
+
+/** Windows iconのpackage input filenameを検証します。 */
+export function parseWindowsIconFile(value: string): WindowsIconFile {
+  return windowsIconFileSchema.parse(value);
 }
 
 /** appId文字列を検証します。 */
