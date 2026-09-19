@@ -77,11 +77,10 @@ function readPackageJson(sourceDirectory: string): PackageJson {
 }
 
 function assertElectronBuilder(packageJson: PackageJson): void {
-  const versions = [
-    packageJson.dependencies?.["electron-builder"],
-    packageJson.devDependencies?.["electron-builder"]
-  ].filter((value): value is string => value !== undefined);
-  if (versions.length === 0 || versions.some((value) => value !== "26.16.1")) {
+  if (packageJson.dependencies?.["electron-builder"] != undefined) {
+    throw new Error("electron-builderはdevDependenciesにだけ配置してください");
+  }
+  if (packageJson.devDependencies?.["electron-builder"] !== "26.16.1") {
     throw new Error("electron-builder依存は26.16.1に固定してください");
   }
 }

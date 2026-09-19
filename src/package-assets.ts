@@ -25,7 +25,7 @@ const webMetadataFileSchema = z
     size: z.number().int().nonnegative().optional(),
     blockMapSize: z.number().int().nonnegative().optional()
   })
-  .strict();
+  .passthrough();
 const webPackageSchema = z
   .object({
     size: z.number().int().nonnegative(),

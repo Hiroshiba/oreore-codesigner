@@ -1,11 +1,12 @@
 # 検証項目
 
 静的検査、実際の GitHub Actions、実機での導入と更新を分けて記録します。
-このリポジトリでは実際の証明書による署名・公開と、実機での起動・更新は未検証です。
+このリポジトリではテストコードを実装せず、CI の静的検査と以下の手動確認を行います。
+実際の証明書による署名・公開と、実機での起動・更新は未検証です。
 
 ## 静的検査と GitHub Actions
 
-[verify ワークフロー](../.github/workflows/verify.yml)で format、lint、型、workflow、shell script、PowerShell script の構文を検査します。Windows runnerではPowerShell scriptの実経路と、NSIS Webの実命名を使うfixtureも検査します。
+[verify ワークフロー](../.github/workflows/verify.yml)で format、lint、型、workflow、shell script、PowerShell script の構文を検査します。
 静的検査の成功だけでは、OS の署名処理や GitHub Release への公開の成功を確認したことにはなりません。
 
 実際の App と Secrets を使う確認は、検証用アプリと検証用 Release で行います。

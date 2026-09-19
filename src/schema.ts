@@ -30,7 +30,7 @@ const metadataFileSchema = z
     sha512: sha512Schema,
     blockMapSize: z.number().int().nonnegative().optional()
   })
-  .strict();
+  .passthrough();
 const updateMetadataSchema = z
   .object({
     version: semverSchema,
@@ -43,11 +43,11 @@ const updateMetadataSchema = z
     sha2: z.string().optional(),
     isAdminRightsRequired: z.boolean().optional()
   })
-  .strict();
+  .passthrough();
 
 export type UpdateMetadata = z.infer<typeof updateMetadataSchema>;
 
-/** 更新metadataをstrictなschemaで検証します。 */
+/** 更新metadataの必要な値をschemaで検証します。 */
 export function parseUpdateMetadata(value: unknown): UpdateMetadata {
   return updateMetadataSchema.parse(value);
 }
