@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 
 [CmdletBinding()]
 param(
@@ -74,7 +74,7 @@ try {
         $trustedPublisherStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
         $trustedPublisherStoreOpened = $true
 
-        $rootMatches = @($rootStore.Certificates | Where-Object { $_.Thumbprint.ToUpperInvariant() -ce $expectedFingerprint })
+        $rootMatches = @($rootStore.Certificates | Where-Object { $_.Thumbprint.ToUpperInvariant() -ceq $expectedFingerprint })
         if ($rootMatches.Count -eq 0) {
             $rootStore.Add($certificate)
             $addedToRoot = $true
@@ -83,7 +83,7 @@ try {
             Write-Output 'Rootは同一fingerprintのため変更しません: CurrentUser'
         }
 
-        $trustedPublisherMatches = @($trustedPublisherStore.Certificates | Where-Object { $_.Thumbprint.ToUpperInvariant() -ce $expectedFingerprint })
+        $trustedPublisherMatches = @($trustedPublisherStore.Certificates | Where-Object { $_.Thumbprint.ToUpperInvariant() -ceq $expectedFingerprint })
         if ($trustedPublisherMatches.Count -eq 0) {
             $trustedPublisherStore.Add($certificate)
             $addedToTrustedPublisher = $true

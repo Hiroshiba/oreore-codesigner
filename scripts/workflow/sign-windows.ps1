@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$UnsignedArchive,
   [Parameter(Mandatory = $true)][string]$PackageInputDirectory,
   [Parameter(Mandatory = $true)][string]$Repository,

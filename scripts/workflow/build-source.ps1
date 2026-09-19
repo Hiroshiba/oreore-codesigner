@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$SourceArchive,
   [Parameter(Mandatory = $true)][string]$SourceSha,
   [Parameter(Mandatory = $true)][string]$CommitTimestamp,
