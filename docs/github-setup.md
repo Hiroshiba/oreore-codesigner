@@ -30,6 +30,9 @@ App 自体には Contents write が必要ですが、取得用トークンは Co
 
 ## 証明書の準備
 
+現在は Windows の公開設定と[公開証明書](../config/certificates/windows.cer)が登録済みで、macOS は `configured: false` です。
+以下は証明書を新たに用意する場合の手順です。
+
 macOS と Windows の証明書を、それぞれの OS で[証明書ツール](../scripts/certificates/README.md)から作成します。
 リポジトリの外に本人だけがアクセスできる空の出力先を用意し、パスワードは対話入力します。
 秘密鍵を含む成果物は macOS の `certificate.p12` と Windows の `certificate.pfx` です。
@@ -49,7 +52,7 @@ base64 にしても秘密情報のため、値をログや文書へ表示しな�
 `certificatePath` へ置くのは公開証明書です。
 P12、PFX、平文の秘密鍵をリポジトリへ追加しないでください。
 Windows のソース設定に `publisherName` がある場合は、`windows.displayName` と一致させます。
-初期状態の `configured: false` のままでは署名できません。
+`configured: false` の OS は、証明書を設定するまで署名できません。
 
 公開証明書と fingerprint の変更はレビュー対象にします。
 利用者がダウンロード先とは別の信頼できる経路で fingerprint を照合できるようにしてください。

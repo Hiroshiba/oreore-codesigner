@@ -19,8 +19,8 @@
 3. 対象タグの Release をあらかじめ作成し、[運用手順](docs/operations.md)に従って `sign-release` を実行します。
 4. [端末の初期設定](docs/device-setup.md)を行い、[検証項目](docs/verification.md)に沿って初回導入と旧版からの更新を確認します。
 
-中央の [config/signing.json](config/signing.json) は、初期状態では両 OS とも `configured: false` です。
-証明書を設定するまでは署名できません。
+中央の [config/signing.json](config/signing.json) は、Windows が `configured: true` で、[公開証明書](config/certificates/windows.cer)も配置済みです。
+macOS は `configured: false` で、証明書を設定するまでは署名できません。
 このリポジトリには秘密鍵を含めません。
 
 指定した Release の同名ファイルは常に上書きします。
