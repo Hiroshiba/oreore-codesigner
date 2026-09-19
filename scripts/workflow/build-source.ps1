@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$Platform,
   [Parameter(Mandatory = $true)][string]$SourceRoot,
   [Parameter(Mandatory = $true)][string]$WorkingDirectory,

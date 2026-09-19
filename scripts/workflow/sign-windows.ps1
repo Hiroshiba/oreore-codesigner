@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$CentralRoot,
   [Parameter(Mandatory = $true)][string]$ContractPath,
   [Parameter(Mandatory = $true)][string]$SourceManifestPath,
