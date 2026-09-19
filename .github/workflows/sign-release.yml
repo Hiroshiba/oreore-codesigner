@@ -101,8 +101,6 @@ jobs:
   build-macos:
     needs: acquire-source
     runs-on: macos-14
-    outputs:
-      version: ${{ steps.build.outputs.version }}
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -141,8 +139,7 @@ jobs:
             "$SOURCE_SHA" \
             "$COMMIT_TIMESTAMP" \
             "$RUNNER_TEMP/macos-build/unsigned-app.tar" \
-            "$RUNNER_TEMP/macos-build/package-input" \
-            "$GITHUB_OUTPUT"
+            "$RUNNER_TEMP/macos-build/package-input"
 
       - name: macOS build artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -155,8 +152,6 @@ jobs:
   build-windows:
     needs: acquire-source
     runs-on: windows-2022
-    outputs:
-      version: ${{ steps.build.outputs.version }}
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -195,8 +190,7 @@ jobs:
             -SourceSha $env:SOURCE_SHA `
             -CommitTimestamp $env:COMMIT_TIMESTAMP `
             -UnsignedArchive (Join-Path $buildDirectory 'unsigned-app.tar') `
-            -PackageInputDirectory (Join-Path $buildDirectory 'package-input') `
-            -OutputFile $env:GITHUB_OUTPUT
+            -PackageInputDirectory (Join-Path $buildDirectory 'package-input')
           if ($LASTEXITCODE -ne 0) { throw 'Windows source buildに失敗しました' }
 
       - name: Windows build artifactを保存

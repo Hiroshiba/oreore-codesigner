@@ -3,8 +3,7 @@
   [Parameter(Mandatory = $true)][string]$SourceSha,
   [Parameter(Mandatory = $true)][string]$CommitTimestamp,
   [Parameter(Mandatory = $true)][string]$UnsignedArchive,
-  [Parameter(Mandatory = $true)][string]$PackageInputDirectory,
-  [Parameter(Mandatory = $true)][Alias('GithubOutputPath')][string]$OutputFile
+  [Parameter(Mandatory = $true)][string]$PackageInputDirectory
 )
 
 Set-StrictMode -Version Latest
@@ -71,7 +70,7 @@ function Get-TarCommitId([string]$Archive) {
   }
 }
 
-if ($SourceArchive.Length -eq 0 -or $UnsignedArchive.Length -eq 0 -or $PackageInputDirectory.Length -eq 0 -or $OutputFile.Length -eq 0) {
+if ($SourceArchive.Length -eq 0 -or $UnsignedArchive.Length -eq 0 -or $PackageInputDirectory.Length -eq 0) {
   throw 'pathを空にできません'
 }
 if ($SourceSha -notmatch '^[0-9a-fA-F]{40}$') {
@@ -84,7 +83,6 @@ if ($CommitTimestamp -notmatch '^[0-9]+$') {
 $SourceArchive = [System.IO.Path]::GetFullPath($SourceArchive)
 $UnsignedArchive = [System.IO.Path]::GetFullPath($UnsignedArchive)
 $PackageInputDirectory = [System.IO.Path]::GetFullPath($PackageInputDirectory)
-$OutputFile = [System.IO.Path]::GetFullPath($OutputFile)
 Assert-RegularFile $SourceArchive 'source archiveが通常fileではありません' | Out-Null
 if (Test-Path -LiteralPath $UnsignedArchive -PathType Any) {
   throw 'unsigned app archiveは開始時に存在してはいけません'
@@ -198,22 +196,6 @@ try {
   if ($packageInput.platform -cne 'windows' -or $packageInput.windows.architecture -cne 'x64') {
     throw 'Windows package-inputのarchitectureはx64でなければなりません'
   }
-  $version = [string]$packageInput.version
-  if ($version.Length -eq 0) {
-    throw 'package-input.jsonのversionが空です'
-  }
-  $githubOutputParent = Split-Path -Parent $OutputFile
-  if (-not (Test-Path -LiteralPath $githubOutputParent -PathType Container)) {
-    New-Item -ItemType Directory -Path $githubOutputParent -ErrorAction Stop | Out-Null
-  }
-  if (Test-Path -LiteralPath $OutputFile -PathType Any) {
-    $githubOutputItem = Get-Item -LiteralPath $OutputFile -Force -ErrorAction Stop
-    if (($githubOutputItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-      throw 'GitHub output pathにsymlinkを指定できません'
-    }
-  }
-  Add-Content -LiteralPath $OutputFile -Value "version=$version" -Encoding utf8 -ErrorAction Stop
-
   $unsignedArchiveParent = Split-Path -Parent $UnsignedArchive
   if (-not (Test-Path -LiteralPath $unsignedArchiveParent -PathType Container)) {
     New-Item -ItemType Directory -Path $unsignedArchiveParent -ErrorAction Stop | Out-Null

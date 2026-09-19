@@ -19,14 +19,12 @@ function isValidArtifactName(value: string): boolean {
     return false;
   }
   let index = 0;
-  let hasPart = false;
   while (index < value.length) {
     if (value.startsWith("${", index)) {
       const tokenEnd = value.indexOf("}", index + 2);
       if (tokenEnd < 0 || !artifactTokens.has(value.slice(index + 2, tokenEnd))) {
         return false;
       }
-      hasPart = true;
       index = tokenEnd + 1;
       continue;
     }
@@ -37,10 +35,9 @@ function isValidArtifactName(value: string): boolean {
     if (index === 0 && !/[A-Za-z0-9]/u.test(character)) {
       return false;
     }
-    hasPart = true;
     index += 1;
   }
-  return hasPart;
+  return true;
 }
 
 function isValidGitRef(value: string): boolean {
@@ -232,10 +229,9 @@ const nsisOptionsSchema = z
   })
   .strict();
 
-const architectureSchema = z.enum(["x64", "arm64"]);
 const macosInputSchema = z
   .object({
-    architecture: architectureSchema,
+    architecture: z.literal("x64"),
     artifactName: artifactNameSchema.optional(),
     entitlements: fileNameSchema.optional(),
     entitlementsInherit: fileNameSchema.optional(),
@@ -309,11 +305,8 @@ const updateMetadataSchema = z
 
 export type SigningConfig = z.infer<typeof signingConfigSchema>;
 export type PackageInput = z.infer<typeof packageInputSchema>;
-export type PackageProjectTarget = "macos" | "windows-nsis" | "windows-nsis-web";
 export type UpdateMetadata = z.infer<typeof updateMetadataSchema>;
 export type WindowsIconFile = z.infer<typeof windowsIconFileSchema>;
-
-export { packageInputSchema, signingConfigSchema, updateMetadataSchema };
 
 /** signing.jsonをstrictなschemaで検証します。 */
 export function parseSigningConfig(value: unknown): SigningConfig {

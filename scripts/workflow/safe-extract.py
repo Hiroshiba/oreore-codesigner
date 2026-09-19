@@ -22,14 +22,13 @@ class ArchiveEntry:
     member: tarfile.TarInfo
     name: str
     parts: tuple[str, ...]
-    link_name: str | None
 
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="検査済みtar archiveを展開します")
     parser.add_argument("--archive", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--platform", choices=("linux", "macos", "windows"), required=True)
+    parser.add_argument("--platform", choices=("macos", "windows"), required=True)
     return parser.parse_args()
 
 
@@ -99,19 +98,16 @@ def inspect_members(archive: tarfile.TarFile, platform: str) -> list[ArchiveEntr
         assert_safe_mode(member)
         if member.islnk() or member.isfifo() or member.isdev():
             raise ExtractionError(f"危険なarchive member typeです: {member.name!r}")
-        if member.isdir():
-            link_name = None
-        elif member.isreg():
+        if member.isreg():
             if member.size < 0:
                 raise ExtractionError(f"regular fileのsizeが不正です: {member.name!r}")
-            link_name = None
         elif member.issym():
             if platform != "macos":
                 raise ExtractionError(f"このplatformではsymlinkを許可しません: {member.name!r}")
-            link_name = normalize_link_target(parts[:-1], member.linkname)
-        else:
+            normalize_link_target(parts[:-1], member.linkname)
+        elif not member.isdir():
             raise ExtractionError(f"未対応のarchive member typeです: {member.name!r}")
-        entry = ArchiveEntry(member, name, parts, link_name)
+        entry = ArchiveEntry(member, name, parts)
         entries.append(entry)
         normalized[key] = entry
 
@@ -143,7 +139,7 @@ def assert_no_symlink_parent(path: Path, output: Path) -> None:
         current = current.parent
 
 
-def ensure_directory(path: Path, output: Path, mode: int) -> None:
+def ensure_directory(path: Path, output: Path) -> None:
     assert_no_symlink_parent(path, output)
     try:
         information = path.lstat()
@@ -170,8 +166,6 @@ def ensure_parent_directories(path: Path, output: Path) -> None:
 
 
 def write_regular_file(archive: tarfile.TarFile, entry: ArchiveEntry, output: Path) -> None:
-    assert_no_symlink_parent(output, output.parent)
-    ensure_parent_directories(output, output.parent)
     if os.path.lexists(output):
         raise ExtractionError(f"展開先pathが既に存在します: {entry.name!r}")
     source = archive.extractfile(entry.member)
@@ -190,8 +184,6 @@ def write_regular_file(archive: tarfile.TarFile, entry: ArchiveEntry, output: Pa
 
 
 def create_symlink(entry: ArchiveEntry, output: Path) -> None:
-    assert_no_symlink_parent(output, output.parent)
-    ensure_parent_directories(output, output.parent)
     if os.path.lexists(output):
         raise ExtractionError(f"symlinkの展開先pathが既に存在します: {entry.name!r}")
     try:
@@ -239,7 +231,7 @@ def extract(archive_path: Path, output_path: Path, platform: str) -> None:
             for entry in sorted(directories, key=lambda value: len(value.parts)):
                 if entry.name == ".":
                     continue
-                ensure_directory(output_path.joinpath(*entry.parts), output_path, entry.member.mode)
+                ensure_directory(output_path.joinpath(*entry.parts), output_path)
             for entry in regular_files:
                 write_regular_file(archive, entry, output_path.joinpath(*entry.parts))
             for entry in symlinks:

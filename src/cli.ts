@@ -144,7 +144,7 @@ function executeValidateReleaseAssets(options: ParsedOptions): void {
 }
 
 /** CLI引数を検証してpackage input、package project、asset検証を実行します。 */
-export function runCli(args: string[]): void {
+function runCli(args: string[]): void {
   const { command, options } = parseOptions(args);
   if (command === "create-package-input") {
     executeCreatePackageInput(options);

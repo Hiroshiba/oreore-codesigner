@@ -21,7 +21,7 @@ import {
   assertRealPathWithin
 } from "./path-safety.js";
 
-export type PackageInputPlatform = "macos" | "windows";
+type PackageInputPlatform = "macos" | "windows";
 
 const sourceAuthorSchema = z.union([
   z.string(),
@@ -33,18 +33,6 @@ const sourceAuthorSchema = z.union([
     })
     .strict()
 ]);
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
-const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([
-    z.string(),
-    z.number().finite(),
-    z.boolean(),
-    z.null(),
-    z.array(jsonValueSchema),
-    z.record(jsonValueSchema)
-  ])
-);
-
 const sourcePackageSchema = z
   .object({
     name: z.string(),
@@ -106,7 +94,7 @@ const sourceNsisSchema = z
     runAfterFinish: z.boolean().optional(),
     artifactName: z.string().optional(),
     guid: z.string().optional(),
-    publish: jsonValueSchema.optional()
+    publish: z.unknown().optional()
   })
   .strict();
 const sourceBuilderSchema = z
@@ -195,12 +183,7 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
 
 function assertDirectory(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isDirectory() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
   }
@@ -208,12 +191,7 @@ function assertDirectory(path: string, message: string): void {
 
 function assertRegularFile(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isFile() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
   }
@@ -221,29 +199,17 @@ function assertRegularFile(path: string, message: string): void {
 
 function readRegularFile(path: string, message: string): Buffer {
   assertRegularFile(path, message);
-  try {
-    return readFileSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  return readFileSync(path);
 }
 
 function readJson(path: string): unknown {
   const source = readRegularFile(path, "JSONファイルがありません").toString("utf8");
-  try {
-    return JSON.parse(source);
-  } catch (error) {
-    throw new Error(`JSONを解析できません: ${path}`, { cause: error });
-  }
+  return JSON.parse(source);
 }
 
 function readYaml(path: string): unknown {
   const source = readRegularFile(path, "electron-builder設定がありません").toString("utf8");
-  try {
-    return parseYaml(source);
-  } catch (error) {
-    throw new Error(`electron-builder設定を解析できません: ${path}`, { cause: error });
-  }
+  return parseYaml(source);
 }
 
 function findBuilderPath(sourceRoot: string): string {
@@ -256,7 +222,7 @@ function findBuilderPath(sourceRoot: string): string {
       existing.push(path);
     } catch (error) {
       if (!isErrnoException(error) || error.code !== "ENOENT") {
-        throw new Error(`electron-builder設定を確認できません: ${path}`, { cause: error });
+        throw error;
       }
     }
   }
@@ -355,11 +321,7 @@ function copyInputFile(
   const sourcePath = resolve(sourceRoot, sourceRelativePath);
   assertRealPathWithin(sourceRoot, sourcePath, `${label}がsource root外を参照しています`);
   const contents = readRegularFile(sourcePath, `${label}がregular fileではありません`);
-  try {
-    writeFileSync(outputPath, contents, { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    throw new Error(`${label}を書き込めません: ${outputPath}`, { cause: error });
-  }
+  writeFileSync(outputPath, contents, { flag: "wx", mode: 0o600 });
 }
 
 function createOutputDirectory(path: string): string {
@@ -371,14 +333,10 @@ function createOutputDirectory(path: string): string {
     lstatSync(outputPath);
   } catch (error) {
     if (!isErrnoException(error) || error.code !== "ENOENT") {
-      throw new Error(`output directoryを確認できません: ${outputPath}`, { cause: error });
+      throw error;
     }
-    try {
-      mkdirSync(outputPath, { mode: 0o700 });
-      return outputPath;
-    } catch (mkdirError) {
-      throw new Error(`output directoryを作成できません: ${outputPath}`, { cause: mkdirError });
-    }
+    mkdirSync(outputPath, { mode: 0o700 });
+    return outputPath;
   }
   throw new Error(`output directoryは開始時に存在してはいけません: ${outputPath}`);
 }
@@ -560,26 +518,26 @@ function buildMacInput(
 ): PackageInput {
   const mac = builder.mac;
   const architecture = resolveArchitecture(mac?.target, "macos");
+  if (architecture !== "x64") {
+    throw new Error("macOS architectureはx64でなければなりません");
+  }
   const appId = builder.appId;
   const productName = builder.productName;
   validateMacPrepackaged(prepackagedRoot, appId, productName, sourcePackage.version);
   const entitlements = mac?.entitlements;
   const entitlementsInherit = mac?.entitlementsInherit;
   if (entitlements != undefined) {
-    const sourcePath = resolve(sourceRoot, parseRelativePath(entitlements));
-    assertRealPathWithin(sourceRoot, sourcePath, "entitlementsがsource root外を参照しています");
-    copyInputFile(sourceRoot, entitlements, join(outputRoot, "entitlements.plist"), "entitlements");
-  }
-  if (entitlementsInherit != undefined) {
-    const sourcePath = resolve(sourceRoot, parseRelativePath(entitlementsInherit));
-    assertRealPathWithin(
-      sourceRoot,
-      sourcePath,
-      "entitlementsInheritがsource root外を参照しています"
-    );
     copyInputFile(
       sourceRoot,
-      entitlementsInherit,
+      parseRelativePath(entitlements),
+      join(outputRoot, "entitlements.plist"),
+      "entitlements"
+    );
+  }
+  if (entitlementsInherit != undefined) {
+    copyInputFile(
+      sourceRoot,
+      parseRelativePath(entitlementsInherit),
       join(outputRoot, "entitlements-inherit.plist"),
       "entitlementsInherit"
     );
@@ -692,18 +650,6 @@ export function createPackageInput(
   platform: PackageInputPlatform,
   outputDirectory: string
 ): PackageInput {
-  if (typeof sourceDirectory !== "string" || sourceDirectory.length === 0) {
-    throw new Error("source-directoryが不正です");
-  }
-  if (typeof prepackagedDirectory !== "string" || prepackagedDirectory.length === 0) {
-    throw new Error("prepackaged-directoryが不正です");
-  }
-  if (platform !== "macos" && platform !== "windows") {
-    throw new Error("platformはmacosまたはwindowsで指定してください");
-  }
-  if (typeof outputDirectory !== "string" || outputDirectory.length === 0) {
-    throw new Error("output-directoryが不正です");
-  }
   const sourceRoot = resolve(sourceDirectory);
   const prepackagedRoot = resolve(prepackagedDirectory);
   assertDirectory(sourceRoot, "source directoryがディレクトリではありません");
@@ -717,18 +663,11 @@ export function createPackageInput(
         ? buildMacInput(sourceRoot, sourcePackage, builder, prepackagedRoot, outputRoot)
         : buildWindowsInput(sourceRoot, sourcePackage, builder, prepackagedRoot, outputRoot);
     const json = JSON.stringify(packageInput, null, 2);
-    if (json == undefined) {
-      throw new Error("package inputを生成できません");
-    }
-    try {
-      writeFileSync(join(outputRoot, "package-input.json"), `${json}\n`, {
-        flag: "wx",
-        encoding: "utf8",
-        mode: 0o600
-      });
-    } catch (error) {
-      throw new Error(`package-input.jsonを書き込めません: ${outputRoot}`, { cause: error });
-    }
+    writeFileSync(join(outputRoot, "package-input.json"), `${json}\n`, {
+      flag: "wx",
+      encoding: "utf8",
+      mode: 0o600
+    });
     return packageInput;
   } catch (error) {
     try {

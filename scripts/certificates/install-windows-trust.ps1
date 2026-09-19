@@ -19,11 +19,7 @@ if ([string]::IsNullOrWhiteSpace($CertificatePath)) {
 }
 
 $expectedFingerprint = $Fingerprint.ToUpperInvariant()
-try {
-    $certificateItem = Get-Item -LiteralPath $CertificatePath -Force
-} catch {
-    throw [System.InvalidOperationException]::new('公開証明書の確認に失敗しました。', $_.Exception)
-}
+$certificateItem = Get-Item -LiteralPath $CertificatePath -Force
 
 if ($certificateItem -isnot [System.IO.FileInfo]) {
     throw '公開証明書パスは通常ファイルで指定してください。'
@@ -41,28 +37,24 @@ $addedToRoot = $false
 $addedToTrustedPublisher = $false
 
 try {
-    try {
-        $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certificateItem.FullName)
-        if ($certificate.HasPrivateKey) {
-            throw '秘密鍵を含むファイルは公開証明書として指定できません。'
-        }
+    $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certificateItem.FullName)
+    if ($certificate.HasPrivateKey) {
+        throw '秘密鍵を含むファイルは公開証明書として指定できません。'
+    }
 
-        $actualFingerprint = $certificate.GetCertHashString().ToUpperInvariant()
-        if ($actualFingerprint -cne $expectedFingerprint) {
-            throw "証明書のfingerprintが一致しません。期待値: $expectedFingerprint 実際の値: $actualFingerprint"
-        }
+    $actualFingerprint = $certificate.GetCertHashString().ToUpperInvariant()
+    if ($actualFingerprint -cne $expectedFingerprint) {
+        throw "証明書のfingerprintが一致しません。期待値: $expectedFingerprint 実際の値: $actualFingerprint"
+    }
 
-        $ekuExtension = @($certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' }) | Select-Object -First 1
-        if ($null -eq $ekuExtension) {
-            throw '証明書にEnhanced Key Usageがありません。'
-        }
-        $enhancedKeyUsage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($ekuExtension, $false)
-        $hasCodeSigning = @($enhancedKeyUsage.EnhancedKeyUsages | Where-Object { $_.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
-        if (-not $hasCodeSigning) {
-            throw '証明書にCode Signing EKUがありません。'
-        }
-    } catch {
-        throw [System.InvalidOperationException]::new('公開証明書の検証に失敗しました。', $_.Exception)
+    $ekuExtension = @($certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' }) | Select-Object -First 1
+    if ($null -eq $ekuExtension) {
+        throw '証明書にEnhanced Key Usageがありません。'
+    }
+    $enhancedKeyUsage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($ekuExtension, $false)
+    $hasCodeSigning = @($enhancedKeyUsage.EnhancedKeyUsages | Where-Object { $_.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
+    if (-not $hasCodeSigning) {
+        throw '証明書にCode Signing EKUがありません。'
     }
 
     try {
@@ -120,7 +112,7 @@ try {
             }
             throw [System.AggregateException]::new('信頼ストア登録に失敗し、変更の取り消しにも失敗しました。', $allExceptions)
         }
-        throw [System.InvalidOperationException]::new('CurrentUserの信頼ストア登録に失敗しました。', $originalException)
+        throw $originalException
     }
 } finally {
     if ($trustedPublisherStoreOpened) {

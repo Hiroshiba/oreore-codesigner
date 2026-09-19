@@ -3,10 +3,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stringify as stringifyYaml } from "yaml";
 import { loadSigningConfig } from "./config.js";
-import { parsePackageInput, type PackageInput, type PackageProjectTarget } from "./schema.js";
+import { parsePackageInput, type PackageInput } from "./schema.js";
 import { assertNoSymlinkAncestors, assertNoSymlinkPath } from "./path-safety.js";
-
-export type { PackageProjectTarget } from "./schema.js";
 
 type MacosPackageProjectRequest = {
   packageInputDirectory: string;
@@ -23,7 +21,15 @@ type WindowsPackageProjectRequest = {
   outputDirectory: string;
   timestampUrl: string;
 };
-export type PackageProjectRequest = MacosPackageProjectRequest | WindowsPackageProjectRequest;
+type PackageProjectRequest = MacosPackageProjectRequest | WindowsPackageProjectRequest;
+
+type ValidatedPackageProject =
+  | (MacosPackageProjectRequest & {
+      input: Extract<PackageInput, { platform: "macos" }>;
+    })
+  | (WindowsPackageProjectRequest & {
+      input: Extract<PackageInput, { platform: "windows" }>;
+    });
 
 const MAC_ENTITLEMENTS_FILE = "entitlements.plist";
 const MAC_ENTITLEMENTS_INHERIT_FILE = "entitlements-inherit.plist";
@@ -40,12 +46,7 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
 
 function assertDirectory(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isDirectory() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
   }
@@ -53,12 +54,7 @@ function assertDirectory(path: string, message: string): void {
 
 function assertRegularFile(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isFile() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
   }
@@ -66,17 +62,8 @@ function assertRegularFile(path: string, message: string): void {
 
 function readJson(path: string): unknown {
   assertRegularFile(path, "package-input.jsonがありません");
-  let source: string;
-  try {
-    source = readFileSync(path, "utf8");
-  } catch (error) {
-    throw new Error(`package-input.jsonを読み込めません: ${path}`, { cause: error });
-  }
-  try {
-    return JSON.parse(source);
-  } catch (error) {
-    throw new Error(`package-input.jsonを解析できません: ${path}`, { cause: error });
-  }
+  const source = readFileSync(path, "utf8");
+  return JSON.parse(source);
 }
 
 function createOutputDirectory(path: string): string {
@@ -88,24 +75,16 @@ function createOutputDirectory(path: string): string {
     lstatSync(outputPath);
   } catch (error) {
     if (!isErrnoException(error) || error.code !== "ENOENT") {
-      throw new Error(`output directoryを確認できません: ${outputPath}`, { cause: error });
+      throw error;
     }
-    try {
-      mkdirSync(outputPath, { mode: 0o700 });
-      return outputPath;
-    } catch (mkdirError) {
-      throw new Error(`output directoryを作成できません: ${outputPath}`, { cause: mkdirError });
-    }
+    mkdirSync(outputPath, { mode: 0o700 });
+    return outputPath;
   }
   throw new Error(`output directoryは開始時に存在してはいけません: ${outputPath}`);
 }
 
 function writeExclusive(path: string, contents: Buffer | string): void {
-  try {
-    writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    throw new Error(`package projectを書き込めません: ${path}`, { cause: error });
-  }
+  writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
   assertRegularFile(path, "package projectのfileがregular fileではありません");
 }
 
@@ -118,9 +97,6 @@ function packageJson(input: PackageInput): string {
     ...(input.author == undefined ? {} : { author: input.author })
   };
   const contents = JSON.stringify(value, null, 2);
-  if (contents == undefined) {
-    throw new Error("package projectのpackage.jsonを生成できません");
-  }
   return `${contents}\n`;
 }
 
@@ -148,22 +124,24 @@ function copyInputFile(
 ): void {
   const sourcePath = resolve(inputRoot, relativePath);
   assertRegularFile(sourcePath, `package inputの${label}がregular fileではありません`);
-  let contents: Buffer;
-  try {
-    contents = readFileSync(sourcePath);
-  } catch (error) {
-    throw new Error(`package inputの${label}を読み込めません: ${sourcePath}`, { cause: error });
-  }
+  const contents = readFileSync(sourcePath);
   writeExclusive(outputPath, contents);
 }
 
-function validateInputPlatform(input: PackageInput, target: PackageProjectTarget): void {
-  if (target === "macos" && input.platform !== "macos") {
-    throw new Error("macos targetにはmacos package inputが必要です");
+function validateInputPlatform(
+  input: PackageInput,
+  request: PackageProjectRequest
+): ValidatedPackageProject {
+  if (request.target === "macos") {
+    if (input.platform !== "macos") {
+      throw new Error("macos targetにはmacos package inputが必要です");
+    }
+    return { ...request, input };
   }
-  if (target !== "macos" && input.platform !== "windows") {
+  if (input.platform !== "windows") {
     throw new Error("Windows targetにはwindows package inputが必要です");
   }
+  return { ...request, input };
 }
 
 function commonBuilder(input: PackageInput): Record<string, unknown> {
@@ -268,31 +246,31 @@ function windowsBuilder(
 function buildProject(
   inputRoot: string,
   outputRoot: string,
-  input: PackageInput,
-  request: PackageProjectRequest,
-  repository: string,
-  tag: string
+  project: ValidatedPackageProject
 ): void {
-  writeExclusive(join(outputRoot, "package.json"), packageJson(input));
+  writeExclusive(join(outputRoot, "package.json"), packageJson(project.input));
   let config: Record<string, unknown>;
-  if (request.target === "macos") {
-    if (input.platform !== "macos") {
-      throw new Error("macos targetにはmacos package inputが必要です");
-    }
+  if (project.target === "macos") {
+    const input = project.input;
     config = {
       ...commonBuilder(input),
-      publish: genericPublish(repository, tag, true),
+      publish: genericPublish(project.repository, project.tag, true),
       mac: macBuilder(input)
     };
   } else {
-    if (input.platform !== "windows") {
-      throw new Error("Windows targetにはwindows package inputが必要です");
-    }
-    config = windowsBuilder(input, request.target, repository, tag, request.timestampUrl);
+    const input = project.input;
+    config = windowsBuilder(
+      input,
+      project.target,
+      project.repository,
+      project.tag,
+      project.timestampUrl
+    );
   }
   const builderContents = stringifyYaml(config);
   writeExclusive(join(outputRoot, "electron-builder.yml"), builderContents);
-  if (request.target === "macos" && input.platform === "macos") {
+  if (project.target === "macos") {
+    const input = project.input;
     if (input.macos.entitlements != undefined) {
       copyInputFile(
         inputRoot,
@@ -309,7 +287,8 @@ function buildProject(
         "entitlementsInherit"
       );
     }
-  } else if (request.target !== "macos" && input.platform === "windows") {
+  } else {
+    const input = project.input;
     if (input.windows.icon != undefined) {
       copyInputFile(
         inputRoot,
@@ -323,22 +302,13 @@ function buildProject(
 
 /** package-inputから署名用の一時package projectを生成します。 */
 export function createPackageProject(request: PackageProjectRequest): void {
-  if (
-    typeof request.packageInputDirectory !== "string" ||
-    request.packageInputDirectory.length === 0
-  ) {
-    throw new Error("package-input-directoryが不正です");
-  }
-  if (typeof request.outputDirectory !== "string" || request.outputDirectory.length === 0) {
-    throw new Error("output-directoryが不正です");
-  }
   const inputRoot = resolve(request.packageInputDirectory);
   assertDirectory(inputRoot, "package-input directoryがディレクトリではありません");
   const input = parsePackageInput(readJson(join(inputRoot, "package-input.json")));
-  validateInputPlatform(input, request.target);
+  const project = validateInputPlatform(input, request);
   const outputRoot = createOutputDirectory(request.outputDirectory);
   try {
-    buildProject(inputRoot, outputRoot, input, request, request.repository, request.tag);
+    buildProject(inputRoot, outputRoot, project);
   } catch (error) {
     try {
       rmSync(outputRoot, { recursive: true });
