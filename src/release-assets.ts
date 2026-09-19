@@ -163,12 +163,6 @@ function assertMetadataFile(
 
 /** assets directoryの実fileと更新metadataの整合性を検証します。 */
 export function validateReleaseAssets(assetsDirectory: string, expectedVersion: string): void {
-  if (typeof assetsDirectory !== "string" || assetsDirectory.length === 0) {
-    throw new Error("assets-directoryが不正です");
-  }
-  if (typeof expectedVersion !== "string" || expectedVersion.length === 0) {
-    throw new Error("expected-versionが不正です");
-  }
   const parsedExpectedVersion = parseSemVer(expectedVersion);
   assertAssetsDirectory(assetsDirectory);
   const entries = readdirSync(assetsDirectory, { withFileTypes: true });

@@ -21,7 +21,7 @@ import {
   assertRealPathWithin
 } from "./path-safety.js";
 
-export type PackageInputPlatform = "macos" | "windows";
+type PackageInputPlatform = "macos" | "windows";
 
 const sourceAuthorSchema = z.union([
   z.string(),
@@ -560,26 +560,26 @@ function buildMacInput(
 ): PackageInput {
   const mac = builder.mac;
   const architecture = resolveArchitecture(mac?.target, "macos");
+  if (architecture !== "x64") {
+    throw new Error("macOS architectureはx64でなければなりません");
+  }
   const appId = builder.appId;
   const productName = builder.productName;
   validateMacPrepackaged(prepackagedRoot, appId, productName, sourcePackage.version);
   const entitlements = mac?.entitlements;
   const entitlementsInherit = mac?.entitlementsInherit;
   if (entitlements != undefined) {
-    const sourcePath = resolve(sourceRoot, parseRelativePath(entitlements));
-    assertRealPathWithin(sourceRoot, sourcePath, "entitlementsがsource root外を参照しています");
-    copyInputFile(sourceRoot, entitlements, join(outputRoot, "entitlements.plist"), "entitlements");
-  }
-  if (entitlementsInherit != undefined) {
-    const sourcePath = resolve(sourceRoot, parseRelativePath(entitlementsInherit));
-    assertRealPathWithin(
-      sourceRoot,
-      sourcePath,
-      "entitlementsInheritがsource root外を参照しています"
-    );
     copyInputFile(
       sourceRoot,
-      entitlementsInherit,
+      parseRelativePath(entitlements),
+      join(outputRoot, "entitlements.plist"),
+      "entitlements"
+    );
+  }
+  if (entitlementsInherit != undefined) {
+    copyInputFile(
+      sourceRoot,
+      parseRelativePath(entitlementsInherit),
       join(outputRoot, "entitlements-inherit.plist"),
       "entitlementsInherit"
     );
@@ -692,18 +692,6 @@ export function createPackageInput(
   platform: PackageInputPlatform,
   outputDirectory: string
 ): PackageInput {
-  if (typeof sourceDirectory !== "string" || sourceDirectory.length === 0) {
-    throw new Error("source-directoryが不正です");
-  }
-  if (typeof prepackagedDirectory !== "string" || prepackagedDirectory.length === 0) {
-    throw new Error("prepackaged-directoryが不正です");
-  }
-  if (platform !== "macos" && platform !== "windows") {
-    throw new Error("platformはmacosまたはwindowsで指定してください");
-  }
-  if (typeof outputDirectory !== "string" || outputDirectory.length === 0) {
-    throw new Error("output-directoryが不正です");
-  }
   const sourceRoot = resolve(sourceDirectory);
   const prepackagedRoot = resolve(prepackagedDirectory);
   assertDirectory(sourceRoot, "source directoryがディレクトリではありません");
@@ -717,9 +705,6 @@ export function createPackageInput(
         ? buildMacInput(sourceRoot, sourcePackage, builder, prepackagedRoot, outputRoot)
         : buildWindowsInput(sourceRoot, sourcePackage, builder, prepackagedRoot, outputRoot);
     const json = JSON.stringify(packageInput, null, 2);
-    if (json == undefined) {
-      throw new Error("package inputを生成できません");
-    }
     try {
       writeFileSync(join(outputRoot, "package-input.json"), `${json}\n`, {
         flag: "wx",
