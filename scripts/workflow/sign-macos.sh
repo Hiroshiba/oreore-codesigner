@@ -70,7 +70,7 @@ cleanup() {
   local status=$?
   local cleanup_status=0
   trap - EXIT
-  unset CSC_LINK CSC_KEY_PASSWORD CSC_NAME
+  unset CSC_LINK CSC_KEY_PASSWORD
   if ! rm -rf -- "$work_directory"; then
     printf '%s\n' 'macOS package用一時directoryの削除に失敗しました' >&2
     cleanup_status=1
@@ -85,18 +85,6 @@ cleanup() {
   exit "$cleanup_status"
 }
 trap cleanup EXIT
-
-macos_configured=$(jq -r '.macos.configured | select(type == "boolean") | tostring' "$central_root/config/signing.json")
-if [[ -z "$macos_configured" ]]; then
-  printf '%s\n' 'macOS signing設定のconfiguredがbooleanではありません' >&2
-  exit 1
-fi
-if [[ "$macos_configured" == true ]]; then
-  export CSC_NAME
-  CSC_NAME=$(jq -er '.macos.displayName' "$central_root/config/signing.json")
-else
-  unset CSC_NAME
-fi
 
 corepack enable
 corepack prepare "$package_manager" --activate

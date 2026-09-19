@@ -43,7 +43,6 @@ electron-builder --win nsis nsis-web --x64 --publish never
 ## 署名と成果物
 
 macOS のジョブは environment secret の P12 を `CSC_LINK`、パスワードを `CSC_KEY_PASSWORD` として electron-builder へ渡します。
-中央の `config/signing.json` で macOS の表示名を設定している場合は `CSC_NAME` にも使い、自己署名 identity を選びます。
 
 Windows のジョブは PFX とパスワードを `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` として electron-builder へ渡します。
 署名 hash、publisher、GUID、NSIS 設定はソース側の設定を使います。

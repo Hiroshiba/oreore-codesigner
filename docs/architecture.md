@@ -27,7 +27,7 @@ electron-builder の appId、productName、GUID、publisher、icon、entitlement
 source の builder 設定にある app 固有値は中央へ転記せず、中央が所有する公開先と署名必須だけを CLI で上書きします。
 source の root、platform、target の publish は契約で禁止し、公開先の優先順位を source 側へ残しません。
 
-macOS は electron-builder に `CSC_LINK`、`CSC_KEY_PASSWORD` と必要な `CSC_NAME` を渡し、一時 keychain の作成と削除を任せます。
+macOS は electron-builder に `CSC_LINK` と `CSC_KEY_PASSWORD` を渡し、一時 keychain の作成と削除を任せます。
 Windows は `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` だけを使い、中央で SignTool を呼んだり `.dll` や `.node` を総当たりで再署名したりしません。
 秘密値と一時署名ストアの後始末は各処理の終了時に行い、処理と cleanup の両方が失敗した場合は両方を報告します。
 

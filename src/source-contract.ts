@@ -28,10 +28,10 @@ const builderConfigSchema = z
     extends: z.never().optional(),
     publish: z.never().optional(),
     target: targetSchema.optional(),
-    mac: noPublishSchema.optional(),
-    win: noPublishSchema.optional(),
-    nsis: noPublishSchema.optional(),
-    nsisWeb: noPublishSchema.optional()
+    mac: noPublishSchema.nullable().optional(),
+    win: noPublishSchema.nullable().optional(),
+    nsis: noPublishSchema.nullable().optional(),
+    nsisWeb: noPublishSchema.nullable().optional()
   })
   .passthrough();
 const packageJsonSchema = z

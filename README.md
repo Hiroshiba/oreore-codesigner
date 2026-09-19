@@ -19,8 +19,8 @@
 3. 対象タグの Release をあらかじめ作成し、[運用手順](docs/operations.md)に従って `sign-release` を実行します。
 4. [端末の初期設定](docs/device-setup.md)を行い、[検証項目](docs/verification.md)に沿って初回導入と旧版からの更新を確認します。
 
-中央の [config/signing.json](config/signing.json) は、Windows が `configured: true` で、[公開証明書](config/certificates/windows.cer)も配置済みです。
-macOS は `configured: false` で、証明書を設定するまでは署名できません。
+中央の [config/signing.json](config/signing.json) には Windows の公開証明書と fingerprint を登録済みです。
+署名ジョブは各 OS の environment secret にある証明書を electron-builder へ渡し、署名の成否は electron-builder の結果で判定します。
 このリポジトリには秘密鍵を含めません。
 
 指定した Release の同名ファイルは常に上書きします。

@@ -30,7 +30,7 @@ App 自体には Contents write が必要ですが、取得用トークンは Co
 
 ## 証明書の準備
 
-現在は Windows の公開設定と[公開証明書](../config/certificates/windows.cer)が登録済みで、macOS は `configured: false` です。
+現在は Windows の公開設定と[公開証明書](../config/certificates/windows.cer)が登録済みです。
 以下は証明書を新たに用意する場合の手順です。
 
 macOS と Windows の証明書を、それぞれの OS で[証明書ツール](../scripts/certificates/README.md)から作成します。
@@ -39,8 +39,7 @@ macOS と Windows の証明書を、それぞれの OS で[証明書ツール](.
 これらとパスワードを安全に保管し、表の Secrets へ登録します。
 base64 にしても秘密情報のため、値をログや文書へ表示しないでください。
 
-公開証明書の fingerprint と有効期限を確認し、`config/signing.json` の `macos` と `windows` を設定します。
-それぞれ `configured: true` にして、次の公開情報を指定します。
+公開証明書の fingerprint と有効期限を確認し、`config/signing.json` の `macos` と `windows` に次の公開情報を指定します。
 
 | 設定項目          | 内容                                                                      |
 | ----------------- | ------------------------------------------------------------------------- |
@@ -50,11 +49,9 @@ base64 にしても秘密情報のため、値をログや文書へ表示しな�
 
 `certificatePath` へ置くのは公開証明書です。
 P12、PFX、平文の秘密鍵をリポジトリへ追加しないでください。
-`configured: false` の OS は、証明書を設定するまで署名できません。
-
 公開証明書と fingerprint の変更はレビュー対象にします。
 利用者がダウンロード先とは別の信頼できる経路で fingerprint を照合できるようにしてください。
-macOS の署名名を `config/signing.json` に設定すると、package job が `CSC_NAME` に使います。
+署名の成否は environment secret の証明書と electron-builder の結果で判定します。
 publisher、GUID、icon、entitlements などのアプリ設定は対象ソースの electron-builder 設定を使います。
 
 ## 対象アプリと Release
