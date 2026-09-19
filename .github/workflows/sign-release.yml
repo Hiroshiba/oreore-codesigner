@@ -26,6 +26,9 @@ jobs:
       owner: ${{ steps.repository.outputs.owner }}
       repo: ${{ steps.repository.outputs.repo }}
       source_sha: ${{ steps.resolve.outputs.source_sha }}
+      version: ${{ steps.contract.outputs.version }}
+      channel: ${{ steps.contract.outputs.channel }}
+      builder_config: ${{ steps.contract.outputs.builder_config }}
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -35,6 +38,14 @@ jobs:
           persist-credentials: false
           submodules: false
           lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.14.0
+
+      - name: 中央setup
+        run: bash scripts/workflow/setup-central.sh
 
       - name: default branchからのdispatchだけを許可
         env:
@@ -107,12 +118,22 @@ jobs:
           fi
           printf 'source_sha=%s\n' "$source_sha" >>"$GITHUB_OUTPUT"
 
+      - name: source契約を検証
+        id: contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          contract_json=$(pnpm exec tsx src/cli.ts validate-source --source-directory "$GITHUB_WORKSPACE/source")
+          {
+            printf 'version=%s\n' "$(jq -er '.version' <<<"$contract_json")"
+            printf 'channel=%s\n' "$(jq -er '.channel' <<<"$contract_json")"
+            printf 'builder_config=%s\n' "$(jq -er '.builder_config' <<<"$contract_json")"
+          } >>"$GITHUB_OUTPUT"
+
   package-macos:
     needs: resolve-source
     runs-on: macos-14
     environment: macos-signing
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -127,6 +148,9 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.14.0
+
+      - name: 中央setup
+        run: bash scripts/workflow/setup-central.sh
 
       - name: source取得用App tokenを発行
         id: source-app-token
@@ -157,6 +181,9 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           REPOSITORY: ${{ inputs.repository }}
           TAG: ${{ inputs.tag }}
+          EXPECTED_VERSION: ${{ needs.resolve-source.outputs.version }}
+          CHANNEL: ${{ needs.resolve-source.outputs.channel }}
+          BUILDER_CONFIG: ${{ needs.resolve-source.outputs.builder_config }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -164,30 +191,10 @@ jobs:
             "$GITHUB_WORKSPACE/source" \
             "$REPOSITORY" \
             "$TAG" \
-            "$RUNNER_TEMP/macos-release"
-
-      - name: 生成metadataのversionを出力
-        id: version
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          shopt -s nullglob
-          metadata_files=("$RUNNER_TEMP/macos-release/metadata"/*.yml)
-          shopt -u nullglob
-          if (( ${#metadata_files[@]} != 1 )); then
-            printf '%s\n' 'macOS生成metadataが一意ではありません' >&2
-            exit 1
-          fi
-          version=$(sed -n 's/^version:[[:space:]]*//p' "${metadata_files[0]}")
-          if [[ "$version" == *$'\n'* || "$version" == *$'\r'* ]]; then
-            printf '%s\n' '生成metadataのversionに改行を指定できません' >&2
-            exit 1
-          fi
-          if [[ -z "$version" ]]; then
-            printf '%s\n' '生成metadataのversionが空です' >&2
-            exit 1
-          fi
-          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+            "$RUNNER_TEMP/macos-release" \
+            "$EXPECTED_VERSION" \
+            "$CHANNEL" \
+            "$BUILDER_CONFIG"
 
       - name: macOS signed artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -201,8 +208,6 @@ jobs:
     needs: resolve-source
     runs-on: windows-2022
     environment: windows-signing
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -217,6 +222,10 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.14.0
+
+      - name: 中央setup
+        shell: bash
+        run: bash scripts/workflow/setup-central.sh
 
       - name: source取得用App tokenを発行
         id: source-app-token
@@ -247,33 +256,20 @@ jobs:
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           REPOSITORY: ${{ inputs.repository }}
           TAG: ${{ inputs.tag }}
+          EXPECTED_VERSION: ${{ needs.resolve-source.outputs.version }}
+          CHANNEL: ${{ needs.resolve-source.outputs.channel }}
+          BUILDER_CONFIG: ${{ needs.resolve-source.outputs.builder_config }}
         shell: pwsh
         run: |
           & "$env:GITHUB_WORKSPACE/scripts/workflow/sign-windows.ps1" `
             -SourceDirectory (Join-Path $env:GITHUB_WORKSPACE 'source') `
             -Repository $env:REPOSITORY `
             -Tag $env:TAG `
-            -ReleaseOutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-release')
+            -ReleaseOutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-release') `
+            -ExpectedVersion $env:EXPECTED_VERSION `
+            -Channel $env:CHANNEL `
+            -BuilderConfig $env:BUILDER_CONFIG
           if ($LASTEXITCODE -ne 0) { throw 'Windows packageに失敗しました' }
-
-      - name: 生成metadataのversionを出力
-        id: version
-        shell: pwsh
-        run: |
-          $metadataFiles = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'windows-release/metadata') -File -Filter '*.yml' -ErrorAction Stop)
-          if ($metadataFiles.Count -ne 1) {
-            throw 'Windows生成metadataが一意ではありません'
-          }
-          $metadata = Get-Content -LiteralPath $metadataFiles[0].FullName -Raw -ErrorAction Stop
-          $match = [regex]::Match($metadata, '(?m)^version:[ \t]*([^\r\n]+)$')
-          if (-not $match.Success) {
-            throw '生成metadataのversionがありません'
-          }
-          $version = $match.Groups[1].Value.Trim()
-          if ([string]::IsNullOrEmpty($version) -or $version.Contains("`n") -or $version.Contains("`r")) {
-            throw '生成metadataのversionが不正です'
-          }
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version"
 
       - name: Windows signed artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -304,18 +300,6 @@ jobs:
       - name: 中央setup
         run: bash scripts/workflow/setup-central.sh
 
-      - name: macOSとWindowsのversion一致を確認
-        env:
-          MACOS_VERSION: ${{ needs.package-macos.outputs.version }}
-          WINDOWS_VERSION: ${{ needs.package-windows.outputs.version }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ -z "$MACOS_VERSION" || -z "$WINDOWS_VERSION" || "$MACOS_VERSION" != "$WINDOWS_VERSION" ]]; then
-            printf 'macOSとWindowsのversionが一致しません: macOS=%s Windows=%s\n' "$MACOS_VERSION" "$WINDOWS_VERSION" >&2
-            exit 1
-          fi
-
       - name: macOS signed artifactを取得
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c809
         with:
@@ -345,7 +329,7 @@ jobs:
           REPOSITORY: ${{ inputs.repository }}
           TAG: ${{ inputs.tag }}
           SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
-          EXPECTED_VERSION: ${{ needs.package-macos.outputs.version }}
+          EXPECTED_VERSION: ${{ needs.resolve-source.outputs.version }}
         shell: bash
         run: |
           set -Eeuo pipefail

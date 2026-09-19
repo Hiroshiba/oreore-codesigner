@@ -16,18 +16,26 @@ function hash(content: Buffer): string {
   return createHash("sha512").update(content).digest("base64");
 }
 
-function metadata(version: string, asset: Asset, blockmap: Asset): string {
-  return [
+function metadata(
+  version: string,
+  asset: Asset,
+  blockmap: Asset,
+  includeBlockMapSize: boolean
+): string {
+  const lines = [
     `version: ${version}`,
     "files:",
     `  - url: ${asset.name}`,
     `    sha512: ${hash(asset.content)}`,
     `    size: ${asset.content.length}`,
-    `    blockMapSize: ${blockmap.content.length}`,
     `path: ${asset.name}`,
     `sha512: ${hash(asset.content)}`,
     ""
-  ].join("\n");
+  ];
+  if (includeBlockMapSize) {
+    lines.splice(5, 0, `    blockMapSize: ${blockmap.content.length}`);
+  }
+  return lines.join("\n");
 }
 
 type MetadataNames = {
@@ -54,8 +62,11 @@ function writeAssets(root: string, version: string, metadataNames: MetadataNames
   for (const asset of [mac, macBlockmap, windows, windowsBlockmap, webInstaller, webPackage]) {
     writeFileSync(join(root, asset.name), asset.content);
   }
-  writeFileSync(join(root, metadataNames.macos), metadata(version, mac, macBlockmap));
-  writeFileSync(join(root, metadataNames.windows), metadata(version, windows, windowsBlockmap));
+  writeFileSync(join(root, metadataNames.macos), metadata(version, mac, macBlockmap, false));
+  writeFileSync(
+    join(root, metadataNames.windows),
+    metadata(version, windows, windowsBlockmap, false)
+  );
 }
 
 function withAssets(
@@ -89,6 +100,28 @@ void test("prerelease channelの両OS metadataを検証できる", () => {
 void test("必須assetが欠けると検証に失敗する", () => {
   withAssets("1.0.0", { macos: "latest-mac.yml", windows: "latest.yml" }, (root) => {
     rmSync(join(root, "app.exe"));
+    assert.throws(() => validateReleaseAssets(root, "1.0.0"));
+  });
+});
+
+void test("macOSとWindowsの外部blockmapを必須にする", () => {
+  withAssets("1.0.0", { macos: "latest-mac.yml", windows: "latest.yml" }, (root) => {
+    rmSync(join(root, "app.zip.blockmap"));
+    assert.throws(() => validateReleaseAssets(root, "1.0.0"));
+  });
+  withAssets("1.0.0", { macos: "latest-mac.yml", windows: "latest.yml" }, (root) => {
+    rmSync(join(root, "app.exe.blockmap"));
+    assert.throws(() => validateReleaseAssets(root, "1.0.0"));
+  });
+});
+
+void test("blockMapSizeが存在するときだけ実サイズを照合する", () => {
+  withAssets("1.0.0", { macos: "latest-mac.yml", windows: "latest.yml" }, (root) => {
+    const mac = { name: "app.zip", content: Buffer.from("mac") };
+    const macBlockmap = { name: "app.zip.blockmap", content: Buffer.from("mac-blockmap") };
+    writeFileSync(join(root, "latest-mac.yml"), metadata("1.0.0", mac, macBlockmap, true));
+    assert.doesNotThrow(() => validateReleaseAssets(root, "1.0.0"));
+    writeFileSync(join(root, macBlockmap.name), Buffer.from("wrong"));
     assert.throws(() => validateReleaseAssets(root, "1.0.0"));
   });
 });

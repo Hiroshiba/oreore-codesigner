@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-if [[ $# -ne 4 ]]; then
-  printf '%s\n' '使い方: sign-macos.sh source-directory repository tag release-output-directory' >&2
+if [[ $# -ne 7 ]]; then
+  printf '%s\n' '使い方: sign-macos.sh source-directory repository tag release-output-directory expected-version channel builder-config' >&2
   exit 2
 fi
 
@@ -10,6 +10,9 @@ source_directory=$1
 repository=$2
 tag=$3
 release_output_directory=$4
+expected_version=$5
+channel=$6
+builder_config=$7
 
 if [[ ! -d "$source_directory" || -L "$source_directory" ]]; then
   printf '%s\n' 'source directoryが通常directoryではありません' >&2
@@ -21,6 +24,14 @@ if [[ ! "$repository" =~ ^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?/[A-Za-z0-9]([
 fi
 if ! git check-ref-format "refs/tags/$tag" >/dev/null; then
   printf '%s\n' 'tagはGit refとして不正です' >&2
+  exit 1
+fi
+if [[ -z "$expected_version" || ! "$channel" =~ ^[0-9A-Za-z-]+$ ]]; then
+  printf '%s\n' 'expected versionまたはchannelが不正です' >&2
+  exit 1
+fi
+if [[ "$builder_config" != electron-builder.yml && "$builder_config" != electron-builder.yaml ]]; then
+  printf '%s\n' 'builder configはelectron-builder.ymlまたはelectron-builder.yamlでなければなりません' >&2
   exit 1
 fi
 if [[ -z "${CSC_LINK:-}" || -z "${CSC_KEY_PASSWORD:-}" ]]; then
@@ -102,88 +113,40 @@ mkdir -p -- "$builder_output"
 (
   cd -- "$source_directory"
   pnpm exec electron-builder \
+    --config "$source_directory/$builder_config" \
     --mac zip \
     --x64 \
     --publish never \
     "--config.directories.output=$builder_output" \
     --config.forceCodeSigning=true \
     --config.mac.forceCodeSigning=true \
+    --config.detectUpdateChannel=false \
+    --config.mac.detectUpdateChannel=false \
     --config.generateUpdatesFilesForAllChannels=false \
     --config.mac.generateUpdatesFilesForAllChannels=false \
     --config.publish.provider=generic \
     "--config.publish.url=$publish_url" \
-    --config.mac.publish.provider=generic \
-    "--config.mac.publish.url=$publish_url" \
-    --config.zip.publish.provider=generic \
-    "--config.zip.publish.url=$publish_url"
+    "--config.publish.channel=$channel" \
+    "--config.extraMetadata.version=$expected_version"
 )
 
-is_update_metadata() {
-  local metadata_path=$1
-  [[ -f "$metadata_path" && ! -L "$metadata_path" ]] || return 1
-  grep -Eq '^version:[[:space:]]+[^[:space:]]+$' "$metadata_path" || return 1
-  grep -Eq '^files:[[:space:]]*$' "$metadata_path" || return 1
-  grep -Eq '^path:[[:space:]]+[^[:space:]]+$' "$metadata_path" || return 1
-  grep -Eq '^sha512:[[:space:]]+[A-Za-z0-9+/=]+$' "$metadata_path"
-}
-
-read_metadata_value() {
-  local key=$1
-  local metadata_path=$2
-  local value
-  value=$(sed -n "s/^$key:[[:space:]]*//p" "$metadata_path" | head -n 1)
-  if [[ -z "$value" ]]; then
-    printf 'metadataの%sがありません: %s\n' "$key" "$metadata_path" >&2
-    return 1
-  fi
-  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
-    value=${value:1:${#value}-2}
-  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
-    value=${value:1:${#value}-2}
-  fi
-  printf '%s' "$value"
-}
-
-find_artifact_by_name() {
-  local artifact_name=$1
-  local -a matches=()
-  local candidate
-  while IFS= read -r -d '' candidate; do
-    if [[ -f "$candidate" && ! -L "$candidate" && "$(basename -- "$candidate")" == "$artifact_name" ]]; then
-      matches+=("$candidate")
-    fi
-  done < <(find "$builder_output" -type f -print0)
-  if (( ${#matches[@]} != 1 )); then
-    printf 'metadataが参照するassetの一意な実fileがありません: %s\n' "$artifact_name" >&2
-    return 1
-  fi
-  printf '%s' "${matches[0]}"
-}
-
-shopt -s nullglob
-metadata_entries=()
-for metadata_path in "$builder_output"/*-mac.yml; do
-  if is_update_metadata "$metadata_path"; then
-    metadata_entries+=("$metadata_path")
-  fi
-done
-shopt -u nullglob
-if (( ${#metadata_entries[@]} != 1 )); then
-  printf '%s\n' 'macOS packageのZIP、blockmap、update metadataが揃っていません' >&2
-  exit 1
-fi
-metadata_path=${metadata_entries[0]}
-zip_name=$(read_metadata_value path "$metadata_path")
-if [[ "$zip_name" == */* || "$zip_name" == *\\* || "$zip_name" == '.' || "$zip_name" == '..' ]]; then
-  printf '%s\n' 'macOS metadataのpathはbasenameでなければなりません' >&2
-  exit 1
-fi
-zip_path=$(find_artifact_by_name "$zip_name")
-blockmap_path=$(find_artifact_by_name "$zip_name.blockmap")
-
+packaged_output=$(
+  cd -- "$central_root"
+  pnpm exec tsx src/cli.ts validate-packaged-output \
+    --output-directory "$builder_output" \
+    --platform macos \
+    --channel "$channel" \
+    --expected-version "$expected_version"
+)
+metadata_name=$(jq -er '.metadata | select(type == "string")' <<<"$packaged_output")
+artifact_relative_path=$(jq -er '.artifact | select(type == "string")' <<<"$packaged_output")
+blockmap_relative_path=$(jq -er '.blockmap | select(type == "string")' <<<"$packaged_output")
+metadata_path="$builder_output/$metadata_name"
+artifact_path="$builder_output/$artifact_relative_path"
+blockmap_path="$builder_output/$blockmap_relative_path"
 payload_directory="$release_output_directory/payload"
 metadata_directory="$release_output_directory/metadata"
 mkdir -p -- "$payload_directory" "$metadata_directory"
-cp -- "$zip_path" "$payload_directory/$zip_name"
-cp -- "$blockmap_path" "$payload_directory/$zip_name.blockmap"
-cp -- "$metadata_path" "$metadata_directory/$(basename -- "$metadata_path")"
+cp -- "$artifact_path" "$payload_directory/$(basename -- "$artifact_relative_path")"
+cp -- "$blockmap_path" "$payload_directory/$(basename -- "$blockmap_relative_path")"
+cp -- "$metadata_path" "$metadata_directory/$(basename -- "$metadata_name")"

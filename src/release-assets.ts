@@ -103,10 +103,7 @@ function assertMetadataFile(
     if (fileContent.sha512 !== file.sha512) {
       throw new Error(`metadata filesのsha512が実fileと一致しません: ${file.url}`);
     }
-    if (metadataKind === ".exe" && file.url === metadata.path && file.blockMapSize == undefined) {
-      throw new Error(`Windows metadataの通常NSIS blockmapがありません: ${file.url}`);
-    }
-    if (file.blockMapSize != undefined) {
+    if (file.url === metadata.path || file.blockMapSize != undefined) {
       const blockMapName = `${file.url}.blockmap`;
       const blockMapAsset = assets.get(blockMapName.toLowerCase());
       if (blockMapAsset == undefined) {
@@ -115,7 +112,7 @@ function assertMetadataFile(
       if (blockMapAsset.name !== blockMapName) {
         throw new Error(`metadata blockmapのbasenameが実fileと一致しません: ${blockMapName}`);
       }
-      if (blockMapAsset.size !== file.blockMapSize) {
+      if (file.blockMapSize != undefined && blockMapAsset.size !== file.blockMapSize) {
         throw new Error(`metadata blockMapSizeが実fileと一致しません: ${file.url}`);
       }
     }

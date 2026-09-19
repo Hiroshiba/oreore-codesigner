@@ -31,7 +31,7 @@ Immutable Release は変更できません。
 同名ファイルは常に `gh release upload --clobber` で置換します。
 新しい成果物と同名でない既存ファイルは削除しません。
 配布ファイルと blockmap を先に、更新 metadata を最後に公開します。
-更新 metadata が参照する実ファイルの名前、サイズ、Base64 の SHA-512、blockmap size、version は公開前に検証します。
+更新 metadata が参照する実ファイルの名前、サイズ、Base64 の SHA-512、外部 blockmap、version は公開前に検証します。`blockMapSize` がある場合だけ実サイズも検証します。
 
 ## 失敗した公開を再実行する
 

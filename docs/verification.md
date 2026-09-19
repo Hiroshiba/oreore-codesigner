@@ -14,11 +14,12 @@
 | --- | --- |
 | 対象リポジトリと入力 | repository と tag で実行でき、App の Selected repositories の範囲だけへアクセスできる |
 | ソース固定 | macOS と Windows が同じ source SHA を checkout し、公開前に tag が移動していれば停止する |
+| source契約 | SemVer version、exact pnpm、electron-builder 26.16.1、build script、単一YAML、publish禁止、versionからのchannelが検証される |
 | ビルド | source で frozen install、build、electron-builder が成功し、source の設定と hook が成果物へ反映される |
 | macOS 署名 | electron-builder の署名が成功し、ZIP、blockmap、更新 metadata が生成される |
 | Windows 署名 | electron-builder の署名が成功し、通常 NSIS、blockmap、channel に対応する root metadata、NSIS Web metadataに対応する installer、`.nsis.7z` package が生成される |
 | 成果物選択 | metadataの参照名から下位directoryを含む成果物を一意に選び、余分な builder 出力を公開しない |
-| 更新 metadata | 実ファイルの参照、サイズ、Base64 の SHA-512、blockmap size、version が一致する |
+| 更新 metadata | 実ファイルの参照、サイズ、Base64 の SHA-512、外部 blockmap、version が一致する。`blockMapSize` がある場合だけ実サイズも一致する |
 | 公開先 | 既存かつ変更可能な Release だけを変更し、Release の本文などを編集しない |
 | 上書き公開 | 同名ファイルを置換し、配布ファイルと blockmap の後に更新 metadata を公開する |
 | 公開失敗と再実行 | 途中状態を確認し、同じ実行の署名済み成果物で修復できる |

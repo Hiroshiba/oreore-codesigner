@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const realPnpm = execFileSync("bash", ["-lc", "command -v pnpm"], { encoding: "utf8" }).trim();
 
 type WorkflowMode = "normal" | "missing" | "duplicate" | "cleanup";
 type WorkflowChannel = "stable" | "beta" | "custom";
@@ -45,23 +46,28 @@ function withMacosWorkflow(
   mkdirSync(binDirectory);
   const version =
     channel === "stable" ? "1.0.0" : channel === "beta" ? "1.0.0-beta.1" : "1.0.0-preview.1";
-  const metadataName =
-    channel === "stable"
-      ? "latest-mac.yml"
-      : channel === "beta"
-        ? "beta-mac.yml"
-        : "preview-mac.yml";
+  const expectedChannel = channel === "stable" ? "latest" : channel === "beta" ? "beta" : "preview";
+  const metadataName = `${expectedChannel}-mac.yml`;
   writeFileSync(
     join(sourceDirectory, "package.json"),
     JSON.stringify({
+      version,
       packageManager: "pnpm@10.30.2",
-      build: {
-        publish: [{ provider: "github", url: "https://source.invalid/root" }],
-        mac: { publish: [{ provider: "github", url: "https://source.invalid/mac" }] },
-        zip: { publish: [{ provider: "github", url: "https://source.invalid/zip" }] },
-        generateUpdatesFilesForAllChannels: true
-      }
+      scripts: { build: "build" },
+      devDependencies: { "electron-builder": "26.16.1" }
     })
+  );
+  writeFileSync(
+    join(sourceDirectory, "electron-builder.yml"),
+    [
+      "productName: Fixture",
+      "extraMetadata:",
+      "  version: 9.9.9",
+      "mac:",
+      "  target:",
+      "    - zip",
+      ""
+    ].join("\n")
   );
   writeExecutable(
     join(binDirectory, "corepack"),
@@ -73,6 +79,12 @@ function withMacosWorkflow(
       "#!/usr/bin/env bash",
       "set -Eeuo pipefail",
       'printf \'%s\\n\' "$@" >> "$WORKFLOW_TEST_ARGUMENTS"',
+      'if [[ "${1:-}" == cli ]]; then',
+      '  exec "$REAL_PNPM" cli "${@:2}"',
+      "fi",
+      'if [[ "${1:-}" == exec && "${2:-}" == tsx ]]; then',
+      '  exec "$REAL_PNPM" exec tsx "${@:3}"',
+      "fi",
       'if [[ "${1:-}" != exec || "${2:-}" != electron-builder ]]; then exit 0; fi',
       "builder_output=''",
       'for argument in "$@"; do',
@@ -82,13 +94,22 @@ function withMacosWorkflow(
       'mkdir -p -- "$builder_output/nested"',
       'printf \'%s\\n\' "$@" > "$WORKFLOW_TEST_BUILDER_ARGUMENTS"',
       'if [[ "${WORKFLOW_TEST_EXPECT_CONFIG_MERGE:-}" == true ]]; then',
-      "  if ! jq -e '.build.zip.publish[0].provider == \"github\"' package.json >/dev/null; then exit 1; fi",
-      '  grep -F -- "--config.zip.publish.provider=generic" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
-      '  grep -F -- "--config.mac.publish.provider=generic" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
+      "  grep -F -- 'version: 9.9.9' electron-builder.yml >/dev/null",
+      '  grep -F -- "--config.extraMetadata.version=$WORKFLOW_TEST_VERSION" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
+      '  grep -F -- "--config.publish.channel=$WORKFLOW_TEST_EXPECTED_CHANNEL" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
+      '  grep -F -- "--config.publish.provider=generic" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
+      '  grep -F -- "--config.publish.url=https://github.com/owner/name/releases/download/v1.0.0-beta.1" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
+      '  grep -F -- "--config.forceCodeSigning=true" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
+      '  grep -F -- "--config.mac.forceCodeSigning=true" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
+      '  grep -F -- "--config.detectUpdateChannel=false" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
+      '  grep -F -- "--config.mac.detectUpdateChannel=false" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null',
+      '  if grep -F -- "--config.zip" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null; then exit 1; fi',
+      '  if grep -F -- "--config.mac.publish" "$WORKFLOW_TEST_BUILDER_ARGUMENTS" >/dev/null; then exit 1; fi',
       "fi",
+      "metadata_sha512=$(printf 'A%.0s' {1..86})==",
       "printf '%s' zip > \"$builder_output/nested/app.zip\"",
       "printf '%s' blockmap > \"$builder_output/nested/app.zip.blockmap\"",
-      'printf \'version: %s\\nfiles:\\n  - url: app.zip\\n    sha512: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\\n    size: 3\\npath: app.zip\\nsha512: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\\n\' "$WORKFLOW_TEST_VERSION" > "$builder_output/$WORKFLOW_TEST_METADATA_NAME"',
+      'printf \'version: %s\\nfiles:\\n  - url: app.zip\\n    sha512: %s\\n    size: 3\\npath: app.zip\\nsha512: %s\\n\' "$WORKFLOW_TEST_VERSION" "$metadata_sha512" "$metadata_sha512" > "$builder_output/$WORKFLOW_TEST_METADATA_NAME"',
       "printf '%s' extra > \"$builder_output/builder-debug.yml\"",
       "printf '%s' extra-zip > \"$builder_output/extra.zip\"",
       "printf '%s' extra-blockmap > \"$builder_output/extra.zip.blockmap\"",
@@ -116,10 +137,12 @@ function withMacosWorkflow(
     CSC_KEY_PASSWORD: "fixture-password",
     CSC_LINK: "fixture-certificate",
     PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+    REAL_PNPM: realPnpm,
     RUNNER_TEMP: workDirectory,
     WORKFLOW_TEST_ARGUMENTS: argumentsPath,
     WORKFLOW_TEST_BUILDER_ARGUMENTS: builderArgumentsPath,
     WORKFLOW_TEST_EXPECT_CONFIG_MERGE: "true",
+    WORKFLOW_TEST_EXPECTED_CHANNEL: expectedChannel,
     WORKFLOW_TEST_METADATA_NAME: metadataName,
     WORKFLOW_TEST_MODE: mode,
     WORKFLOW_TEST_VERSION: version
@@ -132,7 +155,10 @@ function withMacosWorkflow(
         sourceDirectory,
         "owner/name",
         "v1.0.0-beta.1",
-        outputDirectory
+        outputDirectory,
+        version,
+        expectedChannel,
+        "electron-builder.yml"
       ],
       { cwd: repositoryRoot, env, stdio: "pipe" }
     );
@@ -144,7 +170,7 @@ function withMacosWorkflow(
   }
 }
 
-void test("macOSのchannel metadataとbuilder引数を実際のscript境界で検証できる", () => {
+void test("macOSのroot publishと中央version上書きを実際のscript境界で検証できる", () => {
   withMacosWorkflow(
     "normal",
     "beta",
@@ -153,6 +179,8 @@ void test("macOSのchannel metadataとbuilder引数を実際のscript境界で�
       const builderArguments = readFileSync(builderArgumentsPath, "utf8").split("\n");
       assert.equal(builderArguments.includes("--config.forceCodeSigning=true"), true);
       assert.equal(builderArguments.includes("--config.mac.forceCodeSigning=true"), true);
+      assert.equal(builderArguments.includes("--config.detectUpdateChannel=false"), true);
+      assert.equal(builderArguments.includes("--config.mac.detectUpdateChannel=false"), true);
       assert.equal(
         builderArguments.includes("--config.generateUpdatesFilesForAllChannels=false"),
         true
@@ -162,28 +190,22 @@ void test("macOSのchannel metadataとbuilder引数を実際のscript境界で�
         true
       );
       assert.equal(builderArguments.includes("--config.publish.provider=generic"), true);
+      assert.equal(builderArguments.includes("--config.publish.channel=beta"), true);
       assert.equal(
-        builderArguments.includes(
-          "--config.publish.url=https://github.com/owner/name/releases/download/v1.0.0-beta.1"
-        ),
+        builderArguments.some((argument) => argument.startsWith("--config.extraMetadata.version=")),
         true
       );
-      assert.equal(builderArguments.includes("--config.mac.publish.provider=generic"), true);
       assert.equal(
-        builderArguments.includes(
-          "--config.mac.publish.url=https://github.com/owner/name/releases/download/v1.0.0-beta.1"
-        ),
-        true
+        builderArguments.some((argument) => argument.startsWith("--config.zip")),
+        false
       );
-      assert.equal(builderArguments.includes("--config.zip.publish.provider=generic"), true);
       assert.equal(
-        builderArguments.includes(
-          "--config.zip.publish.url=https://github.com/owner/name/releases/download/v1.0.0-beta.1"
-        ),
-        true
+        builderArguments.some((argument) => argument.startsWith("--config.mac.publish")),
+        false
       );
       assert.equal(existsSync(join(outputDirectory, "metadata/beta-mac.yml")), true);
       assert.equal(existsSync(join(outputDirectory, "payload/app.zip")), true);
+      assert.equal(existsSync(join(outputDirectory, "payload/app.zip.blockmap")), true);
       assert.equal(existsSync(join(outputDirectory, "payload/extra.zip")), false);
       assert.equal(existsSync(join(outputDirectory, "payload/builder-debug.yml")), false);
       assert.equal(readFileSync(argumentsPath, "utf8").includes("--publish"), true);
@@ -217,38 +239,37 @@ void test("macOSの必須出力重複を検出できる", () => {
   });
 });
 
-void test("macOSのcleanup失敗を処理失敗と併せて検出できる", () => {
+void test("macOSのcleanup失敗を検出できる", () => {
   withMacosWorkflow("cleanup", "beta", ({ invoke }) => {
     assert.throws(invoke);
   });
 });
 
-void test("Windowsの独立したNSIS Web出力とbuilder上書きを保持する", () => {
+void test("Windows scriptが中央のroot publishと成果物選択を持つ", () => {
   const script = readFileSync(join(repositoryRoot, "scripts/workflow/sign-windows.ps1"), "utf8");
   assert.match(script, /--config\.forceCodeSigning=true/);
   assert.match(script, /--config\.win\.forceCodeSigning=true/);
-  assert.match(script, /--config\.generateUpdatesFilesForAllChannels=false/);
-  assert.match(script, /--config\.win\.generateUpdatesFilesForAllChannels=false/);
+  assert.match(script, /--config\.detectUpdateChannel=false/);
+  assert.match(script, /--config\.win\.detectUpdateChannel=false/);
   assert.match(script, /--config\.publish\.provider=generic/);
   assert.match(script, /--config\.publish\.url=\$publishUrl/);
-  assert.match(script, /--config\.win\.publish\.provider=generic/);
-  assert.match(script, /--config\.win\.publish\.url=\$publishUrl/);
-  assert.match(script, /--config\.nsis\.publish\.provider=generic/);
-  assert.match(script, /--config\.nsis\.publish\.url=\$publishUrl/);
-  assert.match(script, /--config\.nsisWeb\.publish\.provider=generic/);
-  assert.match(script, /--config\.nsisWeb\.publish\.url=\$publishUrl/);
+  assert.match(script, /--config\.publish\.channel=\$Channel/);
+  assert.match(script, /--config\.nsis\.differentialPackage=true/);
+  assert.match(script, /--config\.nsisWeb\.differentialPackage=true/);
+  assert.match(script, /--config\.nsisWeb\.useZip=false/);
   assert.match(script, /--config\.nsisWeb\.appPackageUrl=null/);
-  assert.match(script, /\$webInstaller = Find-Artifact \$webDirectory \$webInstallerName/);
-  assert.match(script, /\$webPackage = Find-Artifact \$webDirectory \$webPackageName/);
-  assert.match(script, /Get-MetadataValue \$webMetadata 'path'/);
-  assert.match(script, /\^\[ \\t\]\+file:/);
-  assert.doesNotMatch(script, /FullName \+ '\.7z'/);
+  assert.doesNotMatch(script, /--config\.win\.publish/);
+  assert.doesNotMatch(script, /--config\.nsis\.publish/);
+  assert.doesNotMatch(script, /--config\.nsisWeb\.publish/);
+  assert.match(script, /validate-packaged-output/);
 });
 
-void test("workflowのversionは生成metadataから取得する", () => {
+void test("workflowはresolve source契約のversionを使いpackage metadataを再抽出しない", () => {
   const workflow = readFileSync(join(repositoryRoot, ".github/workflows/sign-release.yml"), "utf8");
-  assert.match(workflow, /生成metadataのversionを出力/);
-  assert.match(workflow, /macos-release\/metadata/);
-  assert.match(workflow, /windows-release.*metadata/);
-  assert.doesNotMatch(workflow, /source versionを出力/);
+  assert.match(workflow, /source契約を検証/);
+  assert.match(workflow, /steps\.contract\.outputs\.version/);
+  assert.match(workflow, /EXPECTED_VERSION: \$\{\{ needs\.resolve-source\.outputs\.version \}\}/);
+  assert.doesNotMatch(workflow, /生成metadataのversionを出力/);
+  assert.doesNotMatch(workflow, /package-macos\.outputs\.version/);
+  assert.doesNotMatch(workflow, /package-windows\.outputs\.version/);
 });
