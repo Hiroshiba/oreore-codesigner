@@ -21,7 +21,7 @@
 
 ビルドジョブは `pnpm run build` とソース側の electron-builder を実行します。
 `asar`、`extraResources`、ビルド用フックなど、アプリ固有の処理はここで反映します。
-署名ジョブへ渡すものは、梱包前のアプリ本体、`package-input.json`、必要な entitlements です。
+署名ジョブへ渡すものは、梱包前のアプリ本体、`package-input.json`、必要な entitlements と Windows のアイコンです。
 `package-input.json` は実行中に生成する受け渡し用ファイルで、識別子、バージョン、ファイル名やインストーラーの設定など、必要な静的値だけを含みます。
 ソースがこのファイルを管理する必要はありません。
 

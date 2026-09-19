@@ -33,9 +33,14 @@ macOS は `.app` 一つ、Windows は `win-unpacked` 一つを署名前の成果
 署名環境では中央のコードを実行し、ソース側のスクリプトや builder フックは実行しません。
 
 共通の `name`、`version`、`appId`、`productName` に加え、対応する `artifactName` を引き継ぎます。
+`package.json` の `description` と `author`、builder 設定の `copyright` も指定されていれば引き継ぎます。
 macOS は entitlements と署名に必要な静的設定、Windows は実行ファイル名、NSIS の GUID、インストール方法やショートカットなどの静的設定を使います。
 ソースの builder 設定全体を署名環境へ渡すことはありません。
-entitlements はソース内の通常ファイルを指定してください。
+`nsis` と `nsisWeb` の `script`、`include` など、未対応の設定は拒否します。
+
+`win.executableName` は省略でき、その場合は `win-unpacked` 直下に一つだけある `.exe` から確定します。
+指定した `win.icon` は `.ico`、`.png`、`.svg`、`.icns` に対応し、署名ジョブへコピーしてインストーラーの梱包に使います。
+entitlements と `win.icon` はソース内の通常ファイルを指定してください。
 
 Windows の `publisherName` を指定する場合は、中央の `config/signing.json` の `windows.displayName` と一致させます。
 通常 NSIS と NSIS Web の GUID を指定する場合も、両者で一致させます。
@@ -51,6 +56,7 @@ GitHub App の秘密鍵や中央の公開用トークンをアプリへ埋め込
 macOS の更新は ZIP、Windows の更新は通常 NSIS を使います。
 Windows は `disableWebInstaller=true` を設定し、更新クライアントが NSIS Web を取得しないようにします。
 NSIS Web が取得するパッケージの URL は、実行時に指定した repository と tag の Release を指します。
+ソースの `nsis.publish` と `nsisWeb.publish` は中央での公開設定に使いません。
 端末から Release asset を取得できることを、アプリの配布先と認証方式に合わせて確認してください。
 
 更新対象はインストール済みより大きいアプリバージョンにします。
