@@ -33,18 +33,6 @@ const sourceAuthorSchema = z.union([
     })
     .strict()
 ]);
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
-const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([
-    z.string(),
-    z.number().finite(),
-    z.boolean(),
-    z.null(),
-    z.array(jsonValueSchema),
-    z.record(jsonValueSchema)
-  ])
-);
-
 const sourcePackageSchema = z
   .object({
     name: z.string(),
@@ -106,7 +94,7 @@ const sourceNsisSchema = z
     runAfterFinish: z.boolean().optional(),
     artifactName: z.string().optional(),
     guid: z.string().optional(),
-    publish: jsonValueSchema.optional()
+    publish: z.unknown().optional()
   })
   .strict();
 const sourceBuilderSchema = z
