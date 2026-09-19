@@ -117,42 +117,44 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if command -v pwsh >/dev/null 2>&1; then
-            powershell_files_path="$RUNNER_TEMP/verify-powershell-files.nul"
-            powershell_find_status=0
-            find scripts/workflow -type f -name '*.ps1' -print0 > "$powershell_files_path" || powershell_find_status=$?
-            if (( powershell_find_status != 0 )); then
-              printf 'PowerShell scriptの列挙に失敗しました\n' >&2
-              exit "$powershell_find_status"
-            fi
-            mapfile -d '' powershell_files < "$powershell_files_path"
-            if (( ${#powershell_files[@]} == 0 )); then
-              printf '検証対象のPowerShell scriptがありません\n' >&2
-              exit 1
-            fi
-            for file in "${powershell_files[@]}"; do
-              CENTRAL_VERIFY_PS_PATH="$file" pwsh -NoProfile -NonInteractive -Command "
-                \$path = [Environment]::GetEnvironmentVariable(\"CENTRAL_VERIFY_PS_PATH\")
-                if ([string]::IsNullOrWhiteSpace(\$path)) {
-                  throw \"PowerShell script pathが空です\"
-                }
-                \$resolved = @(Resolve-Path -LiteralPath \$path -ErrorAction Stop)
-                if (\$resolved.Count -ne 1) {
-                  throw \"PowerShell script pathを一意に解決できません\"
-                }
-                \$resolvedPath = \$resolved[0].Path
-                if (-not (Test-Path -LiteralPath \$resolvedPath -PathType Leaf -ErrorAction Stop)) {
-                  throw \"PowerShell scriptが通常ファイルではありません\"
-                }
-                \$tokens = \$null
-                \$errors = \$null
-                [System.Management.Automation.Language.Parser]::ParseFile(\$resolvedPath, [ref]\$tokens, [ref]\$errors) | Out-Null
-                if (\$null -ne \$errors -and \$errors.Count -gt 0) {
-                  foreach (\$parseError in \$errors) {
-                    \"{0}:{1}:{2}: {3}\" -f \$resolvedPath, \$parseError.Extent.StartLineNumber, \$parseError.Extent.StartColumnNumber, \$parseError.Message
-                  }
-                  exit 1
-                }
-              "
-            done
+          if ! command -v pwsh >/dev/null 2>&1; then
+            printf 'pwshが見つかりません\n' >&2
+            exit 1
           fi
+          powershell_files_path="$RUNNER_TEMP/verify-powershell-files.nul"
+          powershell_find_status=0
+          find scripts/workflow -type f -name '*.ps1' -print0 > "$powershell_files_path" || powershell_find_status=$?
+          if (( powershell_find_status != 0 )); then
+            printf 'PowerShell scriptの列挙に失敗しました\n' >&2
+            exit "$powershell_find_status"
+          fi
+          mapfile -d '' powershell_files < "$powershell_files_path"
+          if (( ${#powershell_files[@]} == 0 )); then
+            printf '検証対象のPowerShell scriptがありません\n' >&2
+            exit 1
+          fi
+          for file in "${powershell_files[@]}"; do
+            CENTRAL_VERIFY_PS_PATH="$file" pwsh -NoProfile -NonInteractive -Command "
+              \$path = [Environment]::GetEnvironmentVariable(\"CENTRAL_VERIFY_PS_PATH\")
+              if ([string]::IsNullOrWhiteSpace(\$path)) {
+                throw \"PowerShell script pathが空です\"
+              }
+              \$resolved = @(Resolve-Path -LiteralPath \$path -ErrorAction Stop)
+              if (\$resolved.Count -ne 1) {
+                throw \"PowerShell script pathを一意に解決できません\"
+              }
+              \$resolvedPath = \$resolved[0].Path
+              if (-not (Test-Path -LiteralPath \$resolvedPath -PathType Leaf -ErrorAction Stop)) {
+                throw \"PowerShell scriptが通常ファイルではありません\"
+              }
+              \$tokens = \$null
+              \$errors = \$null
+              [System.Management.Automation.Language.Parser]::ParseFile(\$resolvedPath, [ref]\$tokens, [ref]\$errors) | Out-Null
+              if (\$null -ne \$errors -and \$errors.Count -gt 0) {
+                foreach (\$parseError in \$errors) {
+                  \"{0}:{1}:{2}: {3}\" -f \$resolvedPath, \$parseError.Extent.StartLineNumber, \$parseError.Extent.StartColumnNumber, \$parseError.Message
+                }
+                exit 1
+              }
+            "
+          done

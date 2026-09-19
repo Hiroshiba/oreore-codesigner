@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-if [[ $# -ne 6 ]]; then
-  printf '%s\n' '使い方: build-source.sh source.tar source-sha commit-timestamp unsigned-app.tar package-input-directory github-output-path' >&2
+if [[ $# -ne 5 ]]; then
+  printf '%s\n' '使い方: build-source.sh source.tar source-sha commit-timestamp unsigned-app.tar package-input-directory' >&2
   exit 2
 fi
 
@@ -11,7 +11,6 @@ source_sha=$2
 commit_timestamp=$3
 unsigned_archive=$4
 package_input_directory=$5
-github_output_path=$6
 
 if [[ ! -f "$source_archive" || -L "$source_archive" ]]; then
   printf '%s\n' 'source archiveが通常fileではありません' >&2
@@ -25,7 +24,7 @@ if [[ ! "$commit_timestamp" =~ ^[0-9]+$ ]]; then
   printf '%s\n' 'commit timestampが整数ではありません' >&2
   exit 1
 fi
-if [[ -z "$unsigned_archive" || -z "$package_input_directory" || -z "$github_output_path" ]]; then
+if [[ -z "$unsigned_archive" || -z "$package_input_directory" ]]; then
   printf '%s\n' '出力pathを空にできません' >&2
   exit 1
 fi
@@ -192,17 +191,6 @@ if ! jq -e '.platform == "macos" and .macos.architecture == "x64"' "$package_inp
   printf '%s\n' 'macOS package-inputのarchitectureはx64でなければなりません' >&2
   exit 1
 fi
-if ! version=$(jq -er '.version' "$package_input_path"); then
-  printf '%s\n' 'package-input.jsonのversionを取得できません' >&2
-  exit 1
-fi
-if [[ -L "$github_output_path" ]]; then
-  printf '%s\n' 'GitHub output pathにsymlinkを指定できません' >&2
-  exit 1
-fi
-mkdir -p -- "$(dirname -- "$github_output_path")"
-printf 'version=%s\n' "$version" >>"$github_output_path"
-
 mkdir -p -- "$(dirname -- "$unsigned_archive")"
 if ! tar -cf "$unsigned_archive" -C "$prepackaged_directory" "$(basename -- "$app_path")"; then
   printf '%s\n' 'unsigned app archiveの生成に失敗しました' >&2
