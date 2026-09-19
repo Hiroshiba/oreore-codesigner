@@ -183,12 +183,7 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
 
 function assertDirectory(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isDirectory() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
   }
@@ -196,12 +191,7 @@ function assertDirectory(path: string, message: string): void {
 
 function assertRegularFile(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isFile() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
   }
@@ -209,11 +199,7 @@ function assertRegularFile(path: string, message: string): void {
 
 function readRegularFile(path: string, message: string): Buffer {
   assertRegularFile(path, message);
-  try {
-    return readFileSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  return readFileSync(path);
 }
 
 function readJson(path: string): unknown {
@@ -244,7 +230,7 @@ function findBuilderPath(sourceRoot: string): string {
       existing.push(path);
     } catch (error) {
       if (!isErrnoException(error) || error.code !== "ENOENT") {
-        throw new Error(`electron-builder設定を確認できません: ${path}`, { cause: error });
+        throw error;
       }
     }
   }
@@ -343,11 +329,7 @@ function copyInputFile(
   const sourcePath = resolve(sourceRoot, sourceRelativePath);
   assertRealPathWithin(sourceRoot, sourcePath, `${label}がsource root外を参照しています`);
   const contents = readRegularFile(sourcePath, `${label}がregular fileではありません`);
-  try {
-    writeFileSync(outputPath, contents, { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    throw new Error(`${label}を書き込めません: ${outputPath}`, { cause: error });
-  }
+  writeFileSync(outputPath, contents, { flag: "wx", mode: 0o600 });
 }
 
 function createOutputDirectory(path: string): string {
@@ -359,14 +341,10 @@ function createOutputDirectory(path: string): string {
     lstatSync(outputPath);
   } catch (error) {
     if (!isErrnoException(error) || error.code !== "ENOENT") {
-      throw new Error(`output directoryを確認できません: ${outputPath}`, { cause: error });
+      throw error;
     }
-    try {
-      mkdirSync(outputPath, { mode: 0o700 });
-      return outputPath;
-    } catch (mkdirError) {
-      throw new Error(`output directoryを作成できません: ${outputPath}`, { cause: mkdirError });
-    }
+    mkdirSync(outputPath, { mode: 0o700 });
+    return outputPath;
   }
   throw new Error(`output directoryは開始時に存在してはいけません: ${outputPath}`);
 }
@@ -693,15 +671,11 @@ export function createPackageInput(
         ? buildMacInput(sourceRoot, sourcePackage, builder, prepackagedRoot, outputRoot)
         : buildWindowsInput(sourceRoot, sourcePackage, builder, prepackagedRoot, outputRoot);
     const json = JSON.stringify(packageInput, null, 2);
-    try {
-      writeFileSync(join(outputRoot, "package-input.json"), `${json}\n`, {
-        flag: "wx",
-        encoding: "utf8",
-        mode: 0o600
-      });
-    } catch (error) {
-      throw new Error(`package-input.jsonを書き込めません: ${outputRoot}`, { cause: error });
-    }
+    writeFileSync(join(outputRoot, "package-input.json"), `${json}\n`, {
+      flag: "wx",
+      encoding: "utf8",
+      mode: 0o600
+    });
     return packageInput;
   } catch (error) {
     try {

@@ -17,12 +17,7 @@ type AssetInfo = {
 
 function assertAssetsDirectory(path: string): void {
   assertNoSymlinkPath(path, "assets directoryにsymlinkを指定できません");
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`assets directoryを確認できません: ${path}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isDirectory() || information.isSymbolicLink()) {
     throw new Error(`assets directoryがディレクトリではありません: ${path}`);
   }
@@ -30,12 +25,7 @@ function assertAssetsDirectory(path: string): void {
 
 function assertRegularAsset(path: string, name: string): number {
   assertNoSymlinkPath(path, "asset pathにsymlinkを指定できません");
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`assetを確認できません: ${name}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isFile() || information.isSymbolicLink()) {
     throw new Error(`assetはregular fileでなければなりません: ${name}`);
   }
@@ -44,11 +34,7 @@ function assertRegularAsset(path: string, name: string): number {
 
 function readAsset(path: string, name: string): Buffer {
   assertRegularAsset(path, name);
-  try {
-    return readFileSync(path);
-  } catch (error) {
-    throw new Error(`assetを読み込めません: ${name}`, { cause: error });
-  }
+  return readFileSync(path);
 }
 
 function readAssetContent(assetsDirectory: string, asset: AssetInfo): AssetContent {

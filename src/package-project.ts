@@ -46,12 +46,7 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
 
 function assertDirectory(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isDirectory() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
   }
@@ -59,12 +54,7 @@ function assertDirectory(path: string, message: string): void {
 
 function assertRegularFile(path: string, message: string): void {
   assertNoSymlinkPath(path, message);
-  let information;
-  try {
-    information = lstatSync(path);
-  } catch (error) {
-    throw new Error(`${message}: ${path}`, { cause: error });
-  }
+  const information = lstatSync(path);
   if (!information.isFile() || information.isSymbolicLink()) {
     throw new Error(`${message}: ${path}`);
   }
@@ -72,12 +62,7 @@ function assertRegularFile(path: string, message: string): void {
 
 function readJson(path: string): unknown {
   assertRegularFile(path, "package-input.jsonがありません");
-  let source: string;
-  try {
-    source = readFileSync(path, "utf8");
-  } catch (error) {
-    throw new Error(`package-input.jsonを読み込めません: ${path}`, { cause: error });
-  }
+  const source = readFileSync(path, "utf8");
   try {
     return JSON.parse(source);
   } catch (error) {
@@ -94,24 +79,16 @@ function createOutputDirectory(path: string): string {
     lstatSync(outputPath);
   } catch (error) {
     if (!isErrnoException(error) || error.code !== "ENOENT") {
-      throw new Error(`output directoryを確認できません: ${outputPath}`, { cause: error });
+      throw error;
     }
-    try {
-      mkdirSync(outputPath, { mode: 0o700 });
-      return outputPath;
-    } catch (mkdirError) {
-      throw new Error(`output directoryを作成できません: ${outputPath}`, { cause: mkdirError });
-    }
+    mkdirSync(outputPath, { mode: 0o700 });
+    return outputPath;
   }
   throw new Error(`output directoryは開始時に存在してはいけません: ${outputPath}`);
 }
 
 function writeExclusive(path: string, contents: Buffer | string): void {
-  try {
-    writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    throw new Error(`package projectを書き込めません: ${path}`, { cause: error });
-  }
+  writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
   assertRegularFile(path, "package projectのfileがregular fileではありません");
 }
 
@@ -151,12 +128,7 @@ function copyInputFile(
 ): void {
   const sourcePath = resolve(inputRoot, relativePath);
   assertRegularFile(sourcePath, `package inputの${label}がregular fileではありません`);
-  let contents: Buffer;
-  try {
-    contents = readFileSync(sourcePath);
-  } catch (error) {
-    throw new Error(`package inputの${label}を読み込めません: ${sourcePath}`, { cause: error });
-  }
+  const contents = readFileSync(sourcePath);
   writeExclusive(outputPath, contents);
 }
 
