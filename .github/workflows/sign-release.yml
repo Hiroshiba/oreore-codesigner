@@ -20,13 +20,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  acquire-source:
+  resolve-source:
     runs-on: ubuntu-24.04
     outputs:
-      owner: ${{ steps.acquire.outputs.owner }}
-      repo: ${{ steps.acquire.outputs.repo }}
-      source_sha: ${{ steps.acquire.outputs.source_sha }}
-      commit_timestamp: ${{ steps.acquire.outputs.commit_timestamp }}
+      owner: ${{ steps.repository.outputs.owner }}
+      repo: ${{ steps.repository.outputs.repo }}
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      version: ${{ steps.contract.outputs.version }}
+      channel: ${{ steps.contract.outputs.channel }}
+      builder_config: ${{ steps.contract.outputs.builder_config }}
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -36,6 +38,14 @@ jobs:
           persist-credentials: false
           submodules: false
           lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.14.0
+
+      - name: 中央setup
+        run: bash scripts/workflow/setup-central.sh
 
       - name: default branchからのdispatchだけを許可
         env:
@@ -48,10 +58,11 @@ jobs:
             exit 1
           fi
 
-      - name: repositoryを検証
+      - name: 入力を検証
         id: repository
         env:
           REPOSITORY: ${{ inputs.repository }}
+          TAG: ${{ inputs.tag }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -59,10 +70,11 @@ jobs:
             printf '%s\n' 'repositoryはowner/name形式でなければなりません' >&2
             exit 1
           fi
-          owner=${REPOSITORY%%/*}
-          repo=${REPOSITORY#*/}
-          printf 'owner=%s\n' "$owner" >>"$GITHUB_OUTPUT"
-          printf 'repo=%s\n' "$repo" >>"$GITHUB_OUTPUT"
+          if ! git check-ref-format "refs/tags/$TAG" >/dev/null; then
+            printf '%s\n' 'tagはGit refとして不正です' >&2
+            exit 1
+          fi
+          printf 'owner=%s\nrepo=%s\n' "${REPOSITORY%%/*}" "${REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
 
       - name: source取得用App tokenを発行
         id: source-app-token
@@ -75,206 +87,127 @@ jobs:
           permission-contents: read
           skip-token-revoke: false
 
-      - name: 固定SHAのsource archiveを生成
-        id: acquire
+      - name: tagのsourceをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.tag }}
+          token: ${{ steps.source-app-token.outputs.token }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: source SHAを確定
+        id: resolve
         env:
-          GH_TOKEN: ${{ steps.source-app-token.outputs.token }}
-          REPOSITORY: ${{ inputs.repository }}
           TAG: ${{ inputs.tag }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          bash scripts/workflow/acquire-source.sh \
-            "$REPOSITORY" \
-            "$TAG" \
-            "$RUNNER_TEMP/source.tar" \
-            "$GITHUB_OUTPUT"
-
-      - name: source archiveをartifact化
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: release-${{ github.run_id }}-source
-          if-no-files-found: error
-          retention-days: 7
-          path: ${{ runner.temp }}/source.tar
-
-  build-macos:
-    needs: acquire-source
-    runs-on: macos-14
-    steps:
-      - name: 中央repoをcheckout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-          submodules: false
-          lfs: false
-
-      - name: Nodeを設定
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22.14.0
-
-      - name: 中央setup
-        run: bash scripts/workflow/setup-central.sh
-
-      - name: source archiveを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: release-${{ github.run_id }}-source
-          path: ${{ runner.temp }}/source
-
-      - name: 秘密なしsource build
-        id: build
-        env:
-          SOURCE_SHA: ${{ needs.acquire-source.outputs.source_sha }}
-          COMMIT_TIMESTAMP: ${{ needs.acquire-source.outputs.commit_timestamp }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          mkdir -p "$RUNNER_TEMP/macos-build"
-          bash scripts/workflow/build-source.sh \
-            "$RUNNER_TEMP/source/source.tar" \
-            "$SOURCE_SHA" \
-            "$COMMIT_TIMESTAMP" \
-            "$RUNNER_TEMP/macos-build/unsigned-app.tar" \
-            "$RUNNER_TEMP/macos-build/package-input"
-
-      - name: macOS build artifactを保存
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: release-${{ github.run_id }}-macos-build
-          if-no-files-found: error
-          retention-days: 7
-          path: ${{ runner.temp }}/macos-build
-
-  build-windows:
-    needs: acquire-source
-    runs-on: windows-2022
-    steps:
-      - name: 中央repoをcheckout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-          submodules: false
-          lfs: false
-
-      - name: Nodeを設定
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22.14.0
-
-      - name: 中央setup
-        run: bash scripts/workflow/setup-central.sh
-
-      - name: source archiveを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: release-${{ github.run_id }}-source
-          path: ${{ runner.temp }}/source
-
-      - name: 秘密なしsource build
-        id: build
-        env:
-          SOURCE_SHA: ${{ needs.acquire-source.outputs.source_sha }}
-          COMMIT_TIMESTAMP: ${{ needs.acquire-source.outputs.commit_timestamp }}
-        shell: pwsh
-        run: |
-          $buildDirectory = Join-Path $env:RUNNER_TEMP 'windows-build'
-          New-Item -ItemType Directory -Path $buildDirectory -ErrorAction Stop | Out-Null
-          & "$env:GITHUB_WORKSPACE/scripts/workflow/build-source.ps1" `
-            -SourceArchive (Join-Path $env:RUNNER_TEMP 'source/source.tar') `
-            -SourceSha $env:SOURCE_SHA `
-            -CommitTimestamp $env:COMMIT_TIMESTAMP `
-            -UnsignedArchive (Join-Path $buildDirectory 'unsigned-app.tar') `
-            -PackageInputDirectory (Join-Path $buildDirectory 'package-input')
-          if ($LASTEXITCODE -ne 0) { throw 'Windows source buildに失敗しました' }
-
-      - name: Windows build artifactを保存
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: release-${{ github.run_id }}-windows-build
-          if-no-files-found: error
-          retention-days: 7
-          path: ${{ runner.temp }}/windows-build
-
-  sign-macos:
-    needs: build-macos
-    runs-on: macos-14
-    environment: macos-signing
-    outputs:
-      version: ${{ steps.package-input.outputs.version }}
-    steps:
-      - name: 中央repoをcheckout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-          submodules: false
-          lfs: false
-
-      - name: Nodeを設定
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22.14.0
-
-      - name: 中央setup
-        run: bash scripts/workflow/setup-central.sh
-
-      - name: macOS build artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: release-${{ github.run_id }}-macos-build
-          path: ${{ runner.temp }}/macos-build
-
-      - name: package inputのversionを取得
-        id: package-input
-        env:
-          PACKAGE_INPUT_PATH: ${{ runner.temp }}/macos-build/package-input/package-input.json
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          version=$(jq -er '.version | select(type == "string" and length > 0)' "$PACKAGE_INPUT_PATH")
-          if [[ "$version" == *$'\n'* || "$version" == *$'\r'* ]]; then
-            printf '%s\n' 'package inputのversionに改行を指定できません' >&2
+          tag_sha=$(git -C source rev-parse --verify "refs/tags/$TAG^{commit}")
+          source_sha=$(git -C source rev-parse HEAD)
+          if [[ "$source_sha" != "$tag_sha" ]]; then
+            printf '%s\n' 'checkoutしたsourceがtagのcommit SHAと一致しません' >&2
             exit 1
           fi
-          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+          if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '%s\n' 'source SHAが40桁ではありません' >&2
+            exit 1
+          fi
+          printf 'source_sha=%s\n' "$source_sha" >>"$GITHUB_OUTPUT"
+
+      - name: source契約を検証
+        id: contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          contract_json=$(pnpm exec tsx src/cli.ts validate-source --source-directory "$GITHUB_WORKSPACE/source")
+          {
+            printf 'version=%s\n' "$(jq -er '.version' <<<"$contract_json")"
+            printf 'channel=%s\n' "$(jq -er '.channel' <<<"$contract_json")"
+            printf 'builder_config=%s\n' "$(jq -er '.builder_config' <<<"$contract_json")"
+          } >>"$GITHUB_OUTPUT"
+
+  package-macos:
+    needs: resolve-source
+    runs-on: macos-14
+    environment: macos-signing
+    steps:
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.14.0
+
+      - name: 中央setup
+        run: bash scripts/workflow/setup-central.sh
+
+      - name: source取得用App tokenを発行
+        id: source-app-token
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e
+        with:
+          app-id: ${{ vars.SIGNING_APP_ID }}
+          private-key: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
+          owner: ${{ needs.resolve-source.outputs.owner }}
+          repositories: ${{ needs.resolve-source.outputs.repo }}
+          permission-contents: read
+          skip-token-revoke: false
+
+      - name: 固定SHAのsourceをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          token: ${{ steps.source-app-token.outputs.token }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
 
       - name: macOS署名と梱包
         env:
-          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           REPOSITORY: ${{ inputs.repository }}
           TAG: ${{ inputs.tag }}
+          EXPECTED_VERSION: ${{ needs.resolve-source.outputs.version }}
+          CHANNEL: ${{ needs.resolve-source.outputs.channel }}
+          BUILDER_CONFIG: ${{ needs.resolve-source.outputs.builder_config }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          bash scripts/workflow/sign-macos.sh \
-            "$RUNNER_TEMP/macos-build/unsigned-app.tar" \
-            "$RUNNER_TEMP/macos-build/package-input" \
+          bash "$GITHUB_WORKSPACE/scripts/workflow/sign-macos.sh" \
+            "$GITHUB_WORKSPACE/source" \
             "$REPOSITORY" \
             "$TAG" \
-            "$RUNNER_TEMP/macos-release"
+            "$RUNNER_TEMP/macos-release" \
+            "$EXPECTED_VERSION" \
+            "$CHANNEL" \
+            "$BUILDER_CONFIG"
 
       - name: macOS signed artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-${{ github.run_id }}-macos-sign
+          name: release-${{ github.run_id }}-macos
           if-no-files-found: error
           retention-days: 7
           path: ${{ runner.temp }}/macos-release
 
-  sign-windows:
-    needs: build-windows
+  package-windows:
+    needs: resolve-source
     runs-on: windows-2022
     environment: windows-signing
-    outputs:
-      version: ${{ steps.package-input.outputs.version }}
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -291,51 +224,63 @@ jobs:
           node-version: 22.14.0
 
       - name: 中央setup
+        shell: bash
         run: bash scripts/workflow/setup-central.sh
 
-      - name: Windows build artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - name: source取得用App tokenを発行
+        id: source-app-token
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e
         with:
-          name: release-${{ github.run_id }}-windows-build
-          path: ${{ runner.temp }}/windows-build
+          app-id: ${{ vars.SIGNING_APP_ID }}
+          private-key: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
+          owner: ${{ needs.resolve-source.outputs.owner }}
+          repositories: ${{ needs.resolve-source.outputs.repo }}
+          permission-contents: read
+          skip-token-revoke: false
 
-      - name: package inputのversionを取得
-        id: package-input
-        shell: pwsh
-        run: |
-          $packageInputPath = Join-Path $env:RUNNER_TEMP 'windows-build/package-input/package-input.json'
-          $version = (& jq -er '.version | select(type == "string" and length > 0)' $packageInputPath)
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($version) -or $version.Contains("`n") -or $version.Contains("`r")) {
-            throw 'package inputのversionが不正です'
-          }
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version"
+      - name: 固定SHAのsourceをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          token: ${{ steps.source-app-token.outputs.token }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
 
       - name: Windows署名と梱包
         env:
-          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           REPOSITORY: ${{ inputs.repository }}
           TAG: ${{ inputs.tag }}
+          EXPECTED_VERSION: ${{ needs.resolve-source.outputs.version }}
+          CHANNEL: ${{ needs.resolve-source.outputs.channel }}
+          BUILDER_CONFIG: ${{ needs.resolve-source.outputs.builder_config }}
         shell: pwsh
         run: |
           & "$env:GITHUB_WORKSPACE/scripts/workflow/sign-windows.ps1" `
-            -UnsignedArchive (Join-Path $env:RUNNER_TEMP 'windows-build/unsigned-app.tar') `
-            -PackageInputDirectory (Join-Path $env:RUNNER_TEMP 'windows-build/package-input') `
+            -SourceDirectory (Join-Path $env:GITHUB_WORKSPACE 'source') `
             -Repository $env:REPOSITORY `
             -Tag $env:TAG `
-            -ReleaseOutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-release')
-          if ($LASTEXITCODE -ne 0) { throw 'Windows signingに失敗しました' }
+            -ReleaseOutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-release') `
+            -ExpectedVersion $env:EXPECTED_VERSION `
+            -Channel $env:CHANNEL `
+            -BuilderConfig $env:BUILDER_CONFIG
+          if ($LASTEXITCODE -ne 0) { throw 'Windows packageに失敗しました' }
 
       - name: Windows signed artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-${{ github.run_id }}-windows-sign
+          name: release-${{ github.run_id }}-windows
           if-no-files-found: error
           retention-days: 7
           path: ${{ runner.temp }}/windows-release
 
   publish-release:
-    needs: [acquire-source, sign-macos, sign-windows]
+    needs: [resolve-source, package-macos, package-windows]
     runs-on: ubuntu-24.04
     steps:
       - name: 中央repoをcheckout
@@ -355,28 +300,16 @@ jobs:
       - name: 中央setup
         run: bash scripts/workflow/setup-central.sh
 
-      - name: macOSとWindowsのversion一致を確認
-        env:
-          MACOS_VERSION: ${{ needs.sign-macos.outputs.version }}
-          WINDOWS_VERSION: ${{ needs.sign-windows.outputs.version }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ -z "$MACOS_VERSION" || -z "$WINDOWS_VERSION" || "$MACOS_VERSION" != "$WINDOWS_VERSION" ]]; then
-            printf 'macOSとWindowsのversionが一致しません: macOS=%s Windows=%s\n' "$MACOS_VERSION" "$WINDOWS_VERSION" >&2
-            exit 1
-          fi
-
       - name: macOS signed artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c809
         with:
-          name: release-${{ github.run_id }}-macos-sign
+          name: release-${{ github.run_id }}-macos
           path: ${{ runner.temp }}/macos-release
 
       - name: Windows signed artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c809
         with:
-          name: release-${{ github.run_id }}-windows-sign
+          name: release-${{ github.run_id }}-windows
           path: ${{ runner.temp }}/windows-release
 
       - name: 公開用App tokenを発行
@@ -385,8 +318,8 @@ jobs:
         with:
           app-id: ${{ vars.SIGNING_APP_ID }}
           private-key: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
-          owner: ${{ needs.acquire-source.outputs.owner }}
-          repositories: ${{ needs.acquire-source.outputs.repo }}
+          owner: ${{ needs.resolve-source.outputs.owner }}
+          repositories: ${{ needs.resolve-source.outputs.repo }}
           permission-contents: write
           skip-token-revoke: false
 
@@ -395,8 +328,8 @@ jobs:
           GH_TOKEN: ${{ steps.publish-app-token.outputs.token }}
           REPOSITORY: ${{ inputs.repository }}
           TAG: ${{ inputs.tag }}
-          SOURCE_SHA: ${{ needs.acquire-source.outputs.source_sha }}
-          EXPECTED_VERSION: ${{ needs.sign-macos.outputs.version }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+          EXPECTED_VERSION: ${{ needs.resolve-source.outputs.version }}
         shell: bash
         run: |
           set -Eeuo pipefail

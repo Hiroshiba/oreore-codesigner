@@ -2,63 +2,64 @@
 
 対象は、リポジトリのルートで pnpm と electron-builder を使う Electron アプリです。
 公開対象の範囲は GitHub App の Selected repositories で管理し、実行時に `repository` と `tag` を指定します。
-アプリごとの中央用設定ファイルをソースへ追加する必要はありません。
+ソースのコード、依存関係、ビルド hook は管理者が信頼する前提です。
 
 ## ビルドに必要なファイル
 
-| ファイル                                              | 必要な内容                                                                     |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `package.json`                                        | `name`、SemVer の `version`、版を固定した `packageManager`、`build` スクリプト |
-| `pnpm-lock.yaml`                                      | `pnpm install --frozen-lockfile` が通る依存関係                                |
-| `electron-builder.yml` または `electron-builder.yaml` | `appId`、`productName` を含む設定をどちらか一つ                                |
+| ファイル | 必要な内容 |
+| --- | --- |
+| `package.json` | `name`、中央が採用するSemVerの `version`、exact `packageManager`、`build` script、electron-builder 26.16.1 の依存関係 |
+| `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` が通る依存関係 |
+| `electron-builder.yml` または `electron-builder.yaml` | `appId`、`productName`、macOS と Windows の対象設定 |
 
-`packageManager` は `pnpm@10.30.2` のようにアプリが使う pnpm の版を固定します。
-アプリ側の `electron-builder` と `electron-updater` の版は、各アプリの依存関係で管理します。
-中央の依存バージョンへ統一する必要はありません。
-builder 設定は YAML にまとめ、`package.json` の `build` フィールドとの二重定義は使えません。
+`packageManager` は `pnpm@10.30.2` のようにアプリが使う pnpm の exact spec を固定します。
+`electron-builder` は `devDependencies` にだけ 26.16.1 を exact に指定し、`dependencies`、`optionalDependencies`、`peerDependencies` には配置せず、`scripts.build` を必須にします。
+`electron-builder.yml` と `electron-builder.yaml` はどちらか一つだけを置き、`extends` と `package.json` の `build` フィールドは使いません。
+root、`mac`、`win`、`nsis`、`nsisWeb` とその target の `publish` は設定しません。
 
-中央は固定したソースから依存をインストールし、`pnpm run build` の後にソース側の electron-builder を `--dir --x64 --publish never` で実行します。
-macOS は `.app` 一つ、Windows は `win-unpacked` 一つを署名前の成果物として取得します。
-両 OS とも x64 を対象にします。
-`asar`、`asarUnpack`、`extraResources`、アプリ固有のフックはソース側の builder がこの段階で反映します。
-ビルドには署名鍵、GitHub App の秘密鍵、取得・公開用トークンを使えません。
+root `package.json` の `version` が唯一の version 正本です。
+stable version の channel は `latest`、prerelease は最初の identifier です。
+たとえば `1.2.3-foo-mac.1` は `foo-mac` になります。
 
-ソースは Git metadata を含まない archive で渡されます。
-`SOURCE_DATE_EPOCH` には取得したコミットの日時を渡します。
+両 OS のジョブは同じ `source_sha` を checkout し、ソースのルートで次を実行します。
 
-## 署名と梱包へ引き継ぐ設定
+```text
+pnpm install --frozen-lockfile
+pnpm run build
+```
 
-中央はソース設定とアプリ本体を照合し、必要な静的値だけを `package-input.json` へ抽出します。
-これは実行中の受け渡し用ファイルで、アプリ側で作成するものではありません。
-署名環境では中央のコードを実行し、ソース側のスクリプトや builder フックは実行しません。
+その後、ソース側の electron-builder を次の相当する引数で実行します。
 
-共通の `name`、`version`、`appId`、`productName` に加え、対応する `artifactName` を引き継ぎます。
-`package.json` の `description` と `author`、builder 設定の `copyright` も指定されていれば引き継ぎます。
-macOS は entitlements と署名に必要な静的設定、Windows は実行ファイル名、NSIS の GUID、インストール方法やショートカットなどの静的設定を使います。
-ソースの builder 設定全体を署名環境へ渡すことはありません。
-`nsis` と `nsisWeb` の `script`、`include` など、未対応の設定は拒否します。
+```text
+electron-builder --mac zip --x64 --publish never
+electron-builder --win nsis nsis-web --x64 --publish never
+```
 
-`win.executableName` は省略でき、その場合は `win-unpacked` 直下に一つだけある `.exe` から確定します。
-指定した `win.icon` は `.ico`、`.png`、`.svg`、`.icns` に対応し、署名ジョブへコピーしてインストーラーの梱包に使います。
-entitlements と `win.icon` はソース内の通常ファイルを指定してください。
+中央は出力先、x64、macOS ZIP、通常 NSIS、NSIS Web、root と platform の `forceCodeSigning`、現在の channel の更新 metadata、root の generic publish URL を CLI で指定します。
+公開先、対象 tag、署名必須、version と channel は中央が所有し、source の app 設定を再構築しません。
+`asar`、`asarUnpack`、`extraResources`、アプリ固有の hook、appId、productName、GUID、publisher、icon、entitlements、artifactName、NSIS 設定はソース側の builder が直接反映します。
+ビルド時点で署名用秘密鍵や公開用 token をアプリへ埋め込まないでください。
 
-Windows の `publisherName` を指定する場合は、中央の `config/signing.json` の `windows.displayName` と一致させます。
-通常 NSIS と NSIS Web の GUID を指定する場合も、両者で一致させます。
-更新を継続するアプリは、macOS の bundle ID と署名証明書、Windows の appId、GUID、publisher を維持してください。
+## 署名と成果物
+
+macOS のジョブは environment secret の P12 を `CSC_LINK`、パスワードを `CSC_KEY_PASSWORD` として electron-builder へ渡します。
+
+Windows のジョブは PFX とパスワードを `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` として electron-builder へ渡します。
+署名 hash、publisher、GUID、NSIS 設定はソース側の設定を使います。
+
+macOS は ZIP、外部 blockmap、channel に対応する `*-mac.yml` の更新 metadata を、Windows は通常 NSIS の installer、外部 blockmap、channel に対応する root の `.yml` と、NSIS Web metadataを基準に選ぶ installer、`.nsis.7z` package を生成できなければなりません。
+通常 NSIS の更新 metadata は通常 installer を参照します。
+余分なbuilder出力は無視し、artifactNameが下位directoryを含む場合はmetadata参照名から再帰的に一意な実fileを選んでRelease assetのbasenameへ集約します。
 
 ## アプリ内更新
 
-アプリ側へ `electron-updater` と更新先を組み込み、起動後の確認、ダウンロード、再起動時の適用をアプリの既存 UI とエラー処理へ接続します。
-梱包した本体に必要な `app-update.yml` を含め、実際に公開する Release を取得できることを確認してください。
-中央の `--prepackaged` による梱包は、本体内の更新先を変更しません。
-GitHub App の秘密鍵や中央の公開用トークンをアプリへ埋め込んではいけません。
+アプリ側へ `electron-updater` と更新先を組み込み、起動後の確認、ダウンロード、再起動時の適用を既存 UI とエラー処理へ接続します。
+梱包時の generic publish URL は実行時の repository と tag の Release を指します。
+GitHub App の秘密鍵や中央の公開用 token をアプリへ埋め込んではいけません。
 
 macOS の更新は ZIP、Windows の更新は通常 NSIS を使います。
 Windows は `disableWebInstaller=true` を設定し、更新クライアントが NSIS Web を取得しないようにします。
-NSIS Web が取得するパッケージの URL は、実行時に指定した repository と tag の Release を指します。
-ソースの `nsis.publish` と `nsisWeb.publish` は中央での公開設定に使いません。
-端末から Release asset を取得できることを、アプリの配布先と認証方式に合わせて確認してください。
+NSIS Web の installer と 7z package は初回導入用です。
 
 更新対象はインストール済みより大きいアプリバージョンにします。
-タグの参照先や同名ファイルを更新するだけでは、アプリが新しいバージョンと認識するとは限りません。
 差分更新の成功と、差分取得に失敗した場合の全量更新は、[実機検証](verification.md)で確認してください。

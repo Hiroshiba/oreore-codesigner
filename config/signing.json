@@ -1,12 +1,8 @@
 {
-  "macos": {
-    "configured": false
-  },
+  "macos": {},
   "windows": {
-    "configured": true,
     "certificatePath": "config/certificates/windows.cer",
     "fingerprint": "CE71106F03E9968629C5FB2D27A046FB64A722BFE4C5189B75BD1805E570E10B",
-    "displayName": "Hiho Oreore Signing",
-    "timestampUrl": "https://timestamp.digicert.com"
+    "displayName": "Hiho Oreore Signing"
   }
 }

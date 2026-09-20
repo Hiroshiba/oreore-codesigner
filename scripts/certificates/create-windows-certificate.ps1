@@ -76,8 +76,6 @@ $publicCertificate = $null
 $reimportedCertificate = $null
 $operationException = $null
 $cleanupExceptions = [System.Collections.Generic.List[System.Exception]]::new()
-$committedOutputPaths = [System.Collections.Generic.List[string]]::new()
-$commitComplete = $false
 
 try {
     $tempDirectory = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('personal-signing-' + [Guid]::NewGuid().ToString('N'))
@@ -146,12 +144,8 @@ try {
     }
 
     Move-Item -LiteralPath $tempCertificatePath -Destination $certificatePath -ErrorAction Stop
-    [void]$committedOutputPaths.Add($certificatePath)
     Move-Item -LiteralPath $tempPfxPath -Destination $pfxPath -ErrorAction Stop
-    [void]$committedOutputPaths.Add($pfxPath)
     Move-Item -LiteralPath $tempFingerprintPath -Destination $fingerprintPath -ErrorAction Stop
-    [void]$committedOutputPaths.Add($fingerprintPath)
-    $commitComplete = $true
 } catch {
     $operationException = $_.Exception
 } finally {
@@ -198,16 +192,6 @@ try {
             $createdCertificate.Dispose()
         } catch {
             [void]$cleanupExceptions.Add($_.Exception)
-        }
-    }
-
-    if (-not $commitComplete) {
-        foreach ($committedOutputPath in $committedOutputPaths) {
-            try {
-                Remove-Item -LiteralPath $committedOutputPath -Force -ErrorAction Stop
-            } catch {
-                [void]$cleanupExceptions.Add($_.Exception)
-            }
         }
     }
 

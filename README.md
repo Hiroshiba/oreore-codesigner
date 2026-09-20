@@ -19,8 +19,8 @@
 3. 対象タグの Release をあらかじめ作成し、[運用手順](docs/operations.md)に従って `sign-release` を実行します。
 4. [端末の初期設定](docs/device-setup.md)を行い、[検証項目](docs/verification.md)に沿って初回導入と旧版からの更新を確認します。
 
-中央の [config/signing.json](config/signing.json) は、Windows が `configured: true` で、[公開証明書](config/certificates/windows.cer)も配置済みです。
-macOS は `configured: false` で、証明書を設定するまでは署名できません。
+中央の [config/signing.json](config/signing.json) には Windows の公開証明書と fingerprint を登録済みです。
+署名ジョブは各 OS の environment secret にある証明書を electron-builder へ渡し、署名の成否は electron-builder の結果で判定します。
 このリポジトリには秘密鍵を含めません。
 
 指定した Release の同名ファイルは常に上書きします。
@@ -31,8 +31,8 @@ macOS は `configured: false` で、証明書を設定するまでは署名で�
 ## 権限と端末の信頼
 
 ソース取得では対象リポジトリだけを読める GitHub App トークンを使い、タグをコミット SHA に固定します。
-アプリのコードと builder を動かすビルドジョブには、取得・公開用トークンや署名鍵を渡しません。
-署名ジョブは検証したアプリ本体と静的な梱包設定を受け取り、中央のコードで署名します。
+macOS と Windows は同じ SHA のソースを checkout し、各 OS のジョブ内で install、build、署名、梱包まで実行します。
+アプリのコードと builder を動かすジョブには公開用 token を渡しません。
 公開ジョブだけが、対象リポジトリへ書き込む別のトークンを使います。
 詳しくは[構成と信頼境界](docs/architecture.md)を参照してください。
 

@@ -3,7 +3,6 @@ import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { parseSemVer, parseUpdateMetadata, type UpdateMetadata } from "./schema.js";
-import { assertNoSymlinkPath } from "./path-safety.js";
 
 type AssetContent = {
   length: number;
@@ -16,7 +15,6 @@ type AssetInfo = {
 };
 
 function assertAssetsDirectory(path: string): void {
-  assertNoSymlinkPath(path, "assets directoryにsymlinkを指定できません");
   const information = lstatSync(path);
   if (!information.isDirectory() || information.isSymbolicLink()) {
     throw new Error(`assets directoryがディレクトリではありません: ${path}`);
@@ -24,7 +22,6 @@ function assertAssetsDirectory(path: string): void {
 }
 
 function assertRegularAsset(path: string, name: string): number {
-  assertNoSymlinkPath(path, "asset pathにsymlinkを指定できません");
   const information = lstatSync(path);
   if (!information.isFile() || information.isSymbolicLink()) {
     throw new Error(`assetはregular fileでなければなりません: ${name}`);
@@ -51,19 +48,6 @@ function sha512(contents: Buffer): string {
   return createHash("sha512").update(contents).digest("base64");
 }
 
-function equalSha512(actualBase64: string, expected: string): boolean {
-  if (expected === actualBase64) {
-    return true;
-  }
-  if (/^[0-9A-Fa-f]{128}$/u.test(expected)) {
-    return expected.toLowerCase() === Buffer.from(actualBase64, "base64").toString("hex");
-  }
-  if (/^[A-Za-z0-9+/]{86}==$/u.test(expected)) {
-    return Buffer.from(actualBase64, "base64").equals(Buffer.from(expected, "base64"));
-  }
-  return false;
-}
-
 function parseMetadata(path: string, name: string): UpdateMetadata {
   const source = readAsset(path, name).toString("utf8");
   return parseUpdateMetadata(parseYaml(source));
@@ -75,7 +59,7 @@ function assertMetadataFile(
   expectedVersion: string,
   assets: Map<string, AssetInfo>,
   assetsDirectory: string
-): void {
+): string {
   if (metadata.version !== expectedVersion) {
     throw new Error(`metadata versionがexpected-versionと一致しません: ${metadataName}`);
   }
@@ -92,7 +76,7 @@ function assertMetadataFile(
     throw new Error(`metadata pathのbasenameが実fileと一致しません: ${metadata.path}`);
   }
   const pathContent = readAssetContent(assetsDirectory, metadataPathAsset);
-  if (!equalSha512(pathContent.sha512, metadata.sha512)) {
+  if (pathContent.sha512 !== metadata.sha512) {
     throw new Error(`metadata top-level sha512が実assetと一致しません: ${metadata.path}`);
   }
   if (!metadata.files.some((file) => file.url === metadata.path)) {
@@ -114,15 +98,12 @@ function assertMetadataFile(
     }
     const fileContent = readAssetContent(assetsDirectory, fileAsset);
     if (fileContent.length !== file.size) {
-      throw new Error(`metadata filesのsizeが実assetと一致しません: ${file.url}`);
+      throw new Error(`metadata filesのsizeが実fileと一致しません: ${file.url}`);
     }
-    if (!equalSha512(fileContent.sha512, file.sha512)) {
-      throw new Error(`metadata filesのsha512が実assetと一致しません: ${file.url}`);
+    if (fileContent.sha512 !== file.sha512) {
+      throw new Error(`metadata filesのsha512が実fileと一致しません: ${file.url}`);
     }
-    if (metadataKind === ".exe" && file.url === metadata.path && file.blockMapSize == undefined) {
-      throw new Error(`Windows metadataの通常NSIS blockmapがありません: ${file.url}`);
-    }
-    if (file.blockMapSize != undefined) {
+    if (file.url === metadata.path || file.blockMapSize != undefined) {
       const blockMapName = `${file.url}.blockmap`;
       const blockMapAsset = assets.get(blockMapName.toLowerCase());
       if (blockMapAsset == undefined) {
@@ -131,7 +112,7 @@ function assertMetadataFile(
       if (blockMapAsset.name !== blockMapName) {
         throw new Error(`metadata blockmapのbasenameが実fileと一致しません: ${blockMapName}`);
       }
-      if (blockMapAsset.size !== file.blockMapSize) {
+      if (file.blockMapSize != undefined && blockMapAsset.size !== file.blockMapSize) {
         throw new Error(`metadata blockMapSizeが実fileと一致しません: ${file.url}`);
       }
     }
@@ -143,9 +124,7 @@ function assertMetadataFile(
       throw new Error(`Windows metadataが通常NSIS以外を参照しています: ${file.url}`);
     }
   }
-  if (pathContent.length !== metadataPathAsset.size) {
-    throw new Error(`metadata pathのsizeを確認できません: ${metadata.path}`);
-  }
+  return metadataKind;
 }
 
 /** assets directoryの実fileと更新metadataの整合性を検証します。 */
@@ -182,8 +161,21 @@ export function validateReleaseAssets(assetsDirectory: string, expectedVersion: 
       metadata.push({ name: entry.name, path });
     }
   }
+  const metadataKinds = new Set<string>();
   for (const item of metadata) {
-    const parsed = parseMetadata(item.path, item.name);
-    assertMetadataFile(item.name, parsed, parsedExpectedVersion, assets, assetsDirectory);
+    const metadataKind = assertMetadataFile(
+      item.name,
+      parseMetadata(item.path, item.name),
+      parsedExpectedVersion,
+      assets,
+      assetsDirectory
+    );
+    if (metadataKinds.has(metadataKind)) {
+      throw new Error(`同じplatformのmetadataが複数あります: ${metadataKind}`);
+    }
+    metadataKinds.add(metadataKind);
+  }
+  if (!metadataKinds.has(".zip") || !metadataKinds.has(".exe")) {
+    throw new Error("macOSとWindowsのmetadataが必要です");
   }
 }
