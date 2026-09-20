@@ -1,5 +1,9 @@
 {
-  "macos": {},
+  "macos": {
+    "certificatePath": "config/certificates/macos.cer",
+    "fingerprint": "2CAD50BDEB8E5023C0EE9EEC2D5CB09252A64B5664B33D5387EF4AF3B5005AC7",
+    "displayName": "Hiho Oreore Signing"
+  },
   "windows": {
     "certificatePath": "config/certificates/windows.cer",
     "fingerprint": "CE71106F03E9968629C5FB2D27A046FB64A722BFE4C5189B75BD1805E570E10B",
