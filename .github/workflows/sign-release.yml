@@ -202,6 +202,26 @@ jobs:
             "$CHANNEL" \
             "$BUILDER_CONFIG"
 
+      - name: macOS署名を検証
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          shopt -s nullglob
+          archives=("$RUNNER_TEMP/macos-release/payload/"*.zip)
+          if (( ${#archives[@]} != 1 )) || [[ ! -f "${archives[0]}" || -L "${archives[0]}" ]]; then
+            printf '%s\n' '検証対象のmacOS ZIPが一意に存在しません' >&2
+            exit 1
+          fi
+          verification_directory=$(mktemp -d "$RUNNER_TEMP/macos-signature.XXXXXX")
+          trap 'rm -rf -- "$verification_directory"' EXIT
+          ditto -x -k "${archives[0]}" "$verification_directory"
+          apps=("$verification_directory/"*.app)
+          if (( ${#apps[@]} != 1 )) || [[ ! -d "${apps[0]}" || -L "${apps[0]}" ]]; then
+            printf '%s\n' '検証対象のmacOSアプリが一意に存在しません' >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict "${apps[0]}"
+
       - name: macOS signed artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
