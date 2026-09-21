@@ -8,20 +8,24 @@
 1. GitHub App を作成し、Repository permissions の Contents を Read and write にします。Metadata の必須権限を除き、追加の権限は不要です。
 2. App のインストール先を Selected repositories にし、対象アプリのリポジトリを選びます。この選択範囲が署名・公開を許可する対象です。
 3. App ID と秘密鍵を、以下の表に従って中央へ登録します。
-4. 中央の既定ブランチを保護し、ワークフロー、`config/`、署名と公開の実装の変更にレビューを要求します。
-5. `macos-signing`、`windows-signing` の environment を作成し、承認者とデプロイ元の既定ブランチを設定します。
+4. 中央の既定ブランチ `main` を保護し、ワークフロー、`config/`、署名と公開の実装の変更にレビューを要求します。
+5. `macos-signing`、`windows-signing` の environment を作成し、承認者を設定して、デプロイ元を `main` に限定します。
 
 | 種類と配置先                            | 名前                             | 内容                       |
 | --------------------------------------- | -------------------------------- | -------------------------- |
 | Repository variable                     | `SIGNING_APP_ID`                 | GitHub App の数値の App ID |
 | Repository secret                       | `SIGNING_APP_PRIVATE_KEY`        | GitHub App の PEM 秘密鍵   |
-| `macos-signing` の environment secret   | `MACOS_CERTIFICATE_P12_BASE64`   | P12 を base64 にした値     |
-| `macos-signing` の environment secret   | `MACOS_CERTIFICATE_PASSWORD`     | P12 のパスワード           |
+| Repository secret                       | `MACOS_CERTIFICATE_P12_BASE64`   | P12 を base64 にした値     |
+| Repository secret                       | `MACOS_CERTIFICATE_PASSWORD`     | P12 のパスワード           |
 | `windows-signing` の environment secret | `WINDOWS_CERTIFICATE_PFX_BASE64` | PFX を base64 にした値     |
 | `windows-signing` の environment secret | `WINDOWS_CERTIFICATE_PASSWORD`   | PFX のパスワード           |
 
 取得と package のジョブは repository の App 設定を使うため、environment へ同名設定を複製する必要はありません。
 package job には対象 repository の read token と、その OS の署名 secret を渡します。公開用 write token は publish job だけが使います。
+
+macOS の署名 secret は中央の他の workflow や job からも参照でき、`macos-signing` の承認だけでは参照を制限できません。
+中央へ書き込める利用者を信頼できる管理者に限定し、`main` の保護と変更レビューを必須にします。
+`macos-signing` は署名ジョブの承認に使い、同名の environment secret は置きません。
 
 App 自体には Contents write が必要ですが、取得用トークンは Contents read、公開用トークンは Contents write に制限して別々に発行します。
 どちらも実行時に指定したリポジトリ一つだけを対象にし、ジョブ終了時に失効させます。
@@ -30,7 +34,7 @@ App 自体には Contents write が必要ですが、取得用トークンは Co
 
 ## 証明書の準備
 
-現在は Windows の公開設定と[公開証明書](../config/certificates/windows.cer)が登録済みです。
+現在は macOS と Windows の公開設定と、[macOS の公開証明書](../config/certificates/macos.cer)、[Windows の公開証明書](../config/certificates/windows.cer)が登録済みです。
 以下は証明書を新たに用意する場合の手順です。
 
 macOS と Windows の証明書を、それぞれの OS で[証明書ツール](../scripts/certificates/README.md)から作成します。
@@ -51,7 +55,7 @@ base64 にしても秘密情報のため、値をログや文書へ表示しな�
 P12、PFX、平文の秘密鍵をリポジトリへ追加しないでください。
 公開証明書と fingerprint の変更はレビュー対象にします。
 利用者がダウンロード先とは別の信頼できる経路で fingerprint を照合できるようにしてください。
-署名の成否は environment secret の証明書と electron-builder の結果で判定します。
+署名の成否は Secrets に登録した証明書と electron-builder の結果で判定します。
 publisher、GUID、icon、entitlements などのアプリ設定は対象ソースの electron-builder 設定を使います。
 
 ## 対象アプリと Release

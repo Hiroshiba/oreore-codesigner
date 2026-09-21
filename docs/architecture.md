@@ -10,7 +10,7 @@
 | ジョブ | 処理 | 使用する秘密情報と権限 |
 | --- | --- | --- |
 | `resolve-source` | 入力した repository と tag を検証し、tag を checkout して commit SHA と source 契約の version、channel、builder config を固定 | 対象リポジトリ一つの Contents read トークン |
-| `package-macos` | 固定 SHA のソースで install、build、electron-builder による署名と ZIP 梱包を実行 | macOS environment の P12 とパスワード、Contents read |
+| `package-macos` | 固定 SHA のソースで install、build、electron-builder による署名と ZIP 梱包を実行 | Repository secret の P12 とパスワード、Contents read |
 | `package-windows` | 固定 SHA のソースで install、build、electron-builder による署名と NSIS 梱包を実行 | Windows environment の PFX とパスワード、Contents read |
 | `publish-release` | 両 OS の成果物、version、更新 metadata、tag SHA、Release 状態を検証して公開 | 対象リポジトリ一つの Contents write トークン |
 
