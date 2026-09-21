@@ -10,6 +10,8 @@ bash scripts/certificates/create-macos-certificate.sh OUTPUT_DIRECTORY DISPLAY_N
 
 `certificate.cer`、`certificate.p12`、`fingerprint.txt` を出力します。秘密鍵は一時ディレクトリ内だけで生成し、最終出力には平文秘密鍵を残しません。`certificate.p12` だけが秘密鍵を含む成果物です。
 
+P12 は PKCS#12 の伝統的な PBE と SHA-1 MAC で出力します。macOS の `security import` は OpenSSL 3 系が既定で使う PBES2 と SHA-256 MAC を読めず、パスワードが正しくても MAC 検証の失敗として扱います。生成後は使い捨ての keychain へ実際に取り込み、Code Signing identity を取得できることを確認します。
+
 Windows:
 
 ```powershell
