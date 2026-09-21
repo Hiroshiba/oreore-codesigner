@@ -160,11 +160,11 @@ if [[ "${resolved_sha,,}" != "${source_sha,,}" ]]; then
 fi
 
 release_state_path="$work_directory/release-state.json"
-if ! gh api "repos/$repository/releases/tags/$encoded_tag" --jq '{tag_name, immutable}' >"$release_state_path"; then
+if ! gh release view "$tag" --repo "$repository" --json tagName,isImmutable >"$release_state_path"; then
   printf '%s\n' '対象Releaseを取得できませんでした' >&2
   exit 1
 fi
-if ! jq -e --arg tag "$tag" '.tag_name == $tag and .immutable == false' "$release_state_path" >/dev/null; then
+if ! jq -e --arg tag "$tag" '.tagName == $tag and .isImmutable == false' "$release_state_path" >/dev/null; then
   printf '%s\n' '対象Releaseのtagまたはimmutable状態が不正です' >&2
   exit 1
 fi
