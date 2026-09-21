@@ -155,7 +155,7 @@ jobs:
           private-key: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
           owner: ${{ needs.resolve-source.outputs.owner }}
           repositories: ${{ needs.resolve-source.outputs.repo }}
-          permission-contents: write
+          permission-contents: read
           skip-token-revoke: false
 
       - name: 公開対象のdraft Releaseを検証
