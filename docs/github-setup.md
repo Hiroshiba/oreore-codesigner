@@ -9,28 +9,28 @@
 2. App のインストール先を Selected repositories にし、対象アプリのリポジトリを選びます。この選択範囲が署名・公開を許可する対象です。
 3. App ID と秘密鍵を、以下の表に従って中央へ登録します。
 4. 中央の既定ブランチ `main` を保護し、ワークフロー、`config/`、署名と公開の実装の変更にレビューを要求します。
-5. `macos-signing`、`windows-signing` の environment を作成し、承認者を設定して、デプロイ元を `main` に限定します。
+5. `macos-signing` の environment を作成し、承認者を設定して、デプロイ元を `main` に限定します。
 
-| 種類と配置先                            | 名前                             | 内容                       |
-| --------------------------------------- | -------------------------------- | -------------------------- |
-| Repository variable                     | `SIGNING_APP_ID`                 | GitHub App の数値の App ID |
-| Repository secret                       | `SIGNING_APP_PRIVATE_KEY`        | GitHub App の PEM 秘密鍵   |
-| Repository secret                       | `MACOS_CERTIFICATE_P12_BASE64`   | P12 を base64 にした値     |
-| Repository secret                       | `MACOS_CERTIFICATE_PASSWORD`     | P12 のパスワード           |
-| `windows-signing` の environment secret | `WINDOWS_CERTIFICATE_PFX_BASE64` | PFX を base64 にした値     |
-| `windows-signing` の environment secret | `WINDOWS_CERTIFICATE_PASSWORD`   | PFX のパスワード           |
+| 種類と配置先        | 名前                             | 内容                       |
+| ------------------- | -------------------------------- | -------------------------- |
+| Repository variable | `SIGNING_APP_ID`                 | GitHub App の数値の App ID |
+| Repository secret   | `SIGNING_APP_PRIVATE_KEY`        | GitHub App の PEM 秘密鍵   |
+| Repository secret   | `MACOS_CERTIFICATE_P12_BASE64`   | P12 を base64 にした値     |
+| Repository secret   | `MACOS_CERTIFICATE_PASSWORD`     | P12 のパスワード           |
+| Repository secret   | `WINDOWS_CERTIFICATE_PFX_BASE64` | PFX を base64 にした値     |
+| Repository secret   | `WINDOWS_CERTIFICATE_PASSWORD`   | PFX のパスワード           |
 
-取得と package のジョブは repository の App 設定を使うため、environment へ同名設定を複製する必要はありません。
+取得と package のジョブは repository の App 設定を使います。macOS と Windows の署名ジョブは repository secret の証明書を参照します。
 package job には対象 repository の read token と、その OS の署名 secret を渡します。公開用 write token は publish job だけが使います。
 
-macOS の署名 secret は中央の他の workflow や job からも参照でき、`macos-signing` の承認だけでは参照を制限できません。
+macOS と Windows の署名 secret は中央の他の workflow や job からも参照でき、`macos-signing` の承認だけでは参照を制限できません。
 中央へ書き込める利用者を信頼できる管理者に限定し、`main` の保護と変更レビューを必須にします。
-`macos-signing` は署名ジョブの承認に使い、同名の environment secret は置きません。
+`macos-signing` は macOS 署名ジョブの承認に使い、同名の environment secret は置きません。Windows 署名ジョブは environment 承認を待ちません。
 
 App 自体には Contents write が必要ですが、取得用トークンは Contents read、公開用トークンは Contents write に制限して別々に発行します。
 どちらも実行時に指定したリポジトリ一つだけを対象にし、ジョブ終了時に失効させます。
 ワークフローは既定ブランチ以外からの実行を拒否します。
-署名 environment の承認者は、対象リポジトリ、タグ、取得時に固定したコミットを確認してください。
+`macos-signing` の承認者は、対象リポジトリ、タグ、取得時に固定したコミットを確認してください。
 
 ## 証明書の準備
 

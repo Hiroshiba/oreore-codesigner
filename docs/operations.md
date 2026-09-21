@@ -8,7 +8,7 @@
 1. GitHub App の Selected repositories に対象リポジトリを含めます。
 2. 公開するソースへ tag を付け、その tag の GitHub Release をあらかじめ作成します。既存 Release を使う場合は、同名ファイルが置換されることを確認します。
 3. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository` と `tag` を指定します。
-4. macOS の repository secret と `windows-signing` の environment secret が設定済みであることを確認します。`macos-signing` と `windows-signing` で、対象リポジトリ、タグ、固定したコミットを確認して承認します。
+4. macOS と Windows の repository secret が設定済みであることを確認します。`macos-signing` で対象リポジトリ、タグ、固定したコミットを確認して承認します。Windows 署名ジョブは environment 承認なしで実行されます。
 5. 完了後、Release のファイルと[実機検証](verification.md)の結果を確認します。
 
 GitHub CLI では、中央リポジトリの作業ディレクトリから次のように実行します。
@@ -66,5 +66,5 @@ artifact の保持期間は 7 日です。
 秘密鍵、パスワード、GitHub App token をログや記録へ含めないでください。
 記録する実機の条件は[検証項目](verification.md)を参照してください。
 
-証明書を更新するときは、macOS の repository secret または Windows の environment secret と、公開証明書、`config/signing.json` の対応を確認します。
+証明書を更新するときは、macOS または Windows の repository secret と、公開証明書、`config/signing.json` の対応を確認します。
 同じ表示名の新しい証明書でも既存アプリから更新できるとは限らないため、配布前に旧版からの更新を実機で確認してください。
