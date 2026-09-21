@@ -326,10 +326,10 @@ jobs:
           password=$(<"$password_path")
 
           if ! openssl pkcs12 -in "$p12_path" -noout -passin fd:3 3<<<"$password" >/dev/null 2>&1; then
-            printf '%s\n' 'P12_MAC_FAILED' >&2
+            printf '%s\n' 'P12_PARSE_FAILED' >&2
             exit 1
           fi
-          printf '%s\n' 'P12_MAC_OK'
+          printf '%s\n' 'P12_PARSE_OK'
 
           private_public_path="$work_directory/private-public.der"
           certificate_public_path="$work_directory/certificate-public.der"
