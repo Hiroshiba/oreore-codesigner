@@ -98,7 +98,7 @@ cleanup() {
 
   trap - EXIT
   if [[ -n "${verification_keychain_path:-}" && -e "$verification_keychain_path" ]]; then
-    if ! security delete-keychain "$verification_keychain_path" >/dev/null 2>&1; then
+    if ! security delete-keychain "$verification_keychain_path" >/dev/null; then
       cleanup_failed=1
       cleanup_detail="${cleanup_detail} 検証用keychain削除失敗: $verification_keychain_path"
     fi
@@ -176,7 +176,7 @@ if [[ ! "$sha1_fingerprint" =~ ^[0-9A-F]{40}$ || ! "$sha256_fingerprint" =~ ^[0-
   fail '証明書のfingerprintを計算できません。'
 fi
 
-if ! security verify-cert -c "$certificate_der_path" -r "$certificate_der_path" -p codeSign >/dev/null 2>&1; then
+if ! security verify-cert -c "$certificate_der_path" -r "$certificate_der_path" -p codeSign >/dev/null; then
   fail 'securityによるCode Signing証明書の検証に失敗しました。'
 fi
 
@@ -209,14 +209,14 @@ if ! cmp -s "$certificate_der_path" "$reimport_certificate_der_path"; then
 fi
 
 verification_keychain_password=$(openssl rand -hex 32)
-if ! security create-keychain -p "$verification_keychain_password" "$verification_keychain_path" >/dev/null 2>&1; then
+if ! security create-keychain -p "$verification_keychain_password" "$verification_keychain_path" >/dev/null; then
   fail '検証用keychainを作成できません。'
 fi
 if ! security import "$p12_path" \
   -k "$verification_keychain_path" \
   -T /usr/bin/codesign \
   -T /usr/bin/productbuild \
-  -P "$p12_password" >/dev/null 2>&1; then
+  -P "$p12_password" >/dev/null; then
   fail 'securityによるP12の取り込みに失敗しました。'
 fi
 # 自己署名は信頼設定をしないためvalid扱いにはならず、identityとして見つかることだけを確認します
