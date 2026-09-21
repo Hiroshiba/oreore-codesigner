@@ -444,7 +444,6 @@ jobs:
     needs: [resolve-source, preflight-release]
     if: ${{ inputs.diagnose_macos_p12 != true && inputs.preflight_only != true && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/macos-signing-smoke-20260922') }}
     runs-on: windows-2022
-    environment: windows-signing
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -539,13 +538,13 @@ jobs:
         run: bash scripts/workflow/setup-central.sh
 
       - name: macOS signed artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c809
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: release-${{ github.run_id }}-macos
           path: ${{ runner.temp }}/macos-release
 
       - name: Windows signed artifactを取得
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c809
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: release-${{ github.run_id }}-windows
           path: ${{ runner.temp }}/windows-release
