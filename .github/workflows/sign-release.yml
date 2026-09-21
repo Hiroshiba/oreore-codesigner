@@ -11,6 +11,11 @@ on:
         description: 対象sourceの固定tag
         required: true
         type: string
+      diagnose_macos_p12:
+        description: macOS P12を診断し署名と公開を行わない
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -139,6 +144,7 @@ jobs:
 
   package-macos:
     needs: resolve-source
+    if: ${{ inputs.diagnose_macos_p12 != true }}
     runs-on: macos-14
     steps:
       - name: 中央repoをcheckout
@@ -229,6 +235,135 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           path: ${{ runner.temp }}/macos-release
+
+  diagnose-macos-p12:
+    needs: resolve-source
+    if: ${{ inputs.diagnose_macos_p12 == true }}
+    runs-on: macos-14
+    steps:
+      - name: 検証対象を限定
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/test/macos-signing-smoke-20260922" ||
+            "$REPOSITORY" != "Hiroshiba/hiho-cli-audio" ||
+            "$TAG" != "signing-test-pr13-6b2277a" ||
+            "$SOURCE_SHA" != "6b2277a2151a996b72fe9858b125564775989f2d" ]]; then
+            printf '%s\n' 'P12_TARGET_REJECTED' >&2
+            exit 1
+          fi
+
+      - name: 中央repoをcheckout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Nodeを設定
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.14.0
+
+      - name: P12を段階別に診断
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +x
+          umask 077
+          if ! work_directory=$(mktemp -d "$RUNNER_TEMP/macos-p12-diagnostic.XXXXXX" 2>/dev/null); then
+            printf '%s\n' 'P12_SETUP_FAILED' >&2
+            exit 1
+          fi
+          keychain="$work_directory/diagnostic.keychain-db"
+          cleanup() {
+            local status=$?
+            local cleanup_status=0
+            trap - EXIT
+            unset CSC_LINK CSC_KEY_PASSWORD password keychain_password
+            if [[ -e "$keychain" ]] && ! security delete-keychain "$keychain" >/dev/null 2>&1; then
+              cleanup_status=1
+            fi
+            if ! rm -rf -- "$work_directory" >/dev/null 2>&1; then
+              cleanup_status=1
+            fi
+            if (( cleanup_status != 0 )); then
+              printf '%s\n' 'P12_CLEANUP_FAILED' >&2
+              exit 1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          p12_path="$work_directory/certificate.p12"
+          password_path="$work_directory/password"
+          if ! node - "$p12_path" "$password_path" >/dev/null 2>&1 <<'NODE'
+          const fs = require('node:fs');
+          const link = process.env.CSC_LINK;
+          const password = process.env.CSC_KEY_PASSWORD;
+          if (link === undefined || password === undefined) process.exit(1);
+          const trimmedLink = link.trim();
+          const trimmedPassword = password.trim();
+          const p12 = Buffer.from(trimmedLink, 'base64');
+          if (p12.byteLength === 0 || trimmedPassword === '') process.exit(1);
+          fs.writeFileSync(process.argv[2], p12, { mode: 0o600 });
+          fs.writeFileSync(process.argv[3], trimmedPassword, { mode: 0o600 });
+          NODE
+          then
+            printf '%s\n' 'P12_DECODE_FAILED' >&2
+            exit 1
+          fi
+          printf '%s\n' 'P12_DECODE_OK'
+          password=$(<"$password_path")
+
+          if ! openssl pkcs12 -in "$p12_path" -noout -passin fd:3 3<<<"$password" >/dev/null 2>&1; then
+            printf '%s\n' 'P12_MAC_FAILED' >&2
+            exit 1
+          fi
+          printf '%s\n' 'P12_MAC_OK'
+
+          private_public_path="$work_directory/private-public.der"
+          certificate_public_path="$work_directory/certificate-public.der"
+          certificate_pem_path="$work_directory/certificate.pem"
+          if ! openssl pkcs12 -in "$p12_path" -nocerts -nodes -passin fd:3 3<<<"$password" 2>/dev/null |
+            openssl pkey -pubout -outform DER -out "$private_public_path" >/dev/null 2>&1; then
+            printf '%s\n' 'P12_KEY_CERT_FAILED' >&2
+            exit 1
+          fi
+          if ! openssl pkcs12 -in "$p12_path" -clcerts -nokeys -out "$certificate_pem_path" -passin fd:3 3<<<"$password" >/dev/null 2>&1 ||
+            ! openssl x509 -in "$certificate_pem_path" -pubkey -noout 2>/dev/null |
+              openssl pkey -pubin -outform DER -out "$certificate_public_path" >/dev/null 2>&1 ||
+            ! cmp -s "$private_public_path" "$certificate_public_path"; then
+            printf '%s\n' 'P12_KEY_CERT_FAILED' >&2
+            exit 1
+          fi
+          printf '%s\n' 'P12_KEY_CERT_OK'
+
+          certificate_der_path="$work_directory/certificate.cer"
+          if ! openssl x509 -in "$certificate_pem_path" -outform DER -out "$certificate_der_path" >/dev/null 2>&1 ||
+            ! cmp -s "$certificate_der_path" "$GITHUB_WORKSPACE/config/certificates/macos.cer"; then
+            printf '%s\n' 'P12_PUBLIC_CER_FAILED' >&2
+            exit 1
+          fi
+          printf '%s\n' 'P12_PUBLIC_CER_OK'
+
+          if ! keychain_password=$(openssl rand -hex 32 2>/dev/null) ||
+            ! security create-keychain -p "$keychain_password" "$keychain" >/dev/null 2>&1 ||
+            ! security unlock-keychain -p "$keychain_password" "$keychain" >/dev/null 2>&1 ||
+            ! security import "$p12_path" -k "$keychain" -P "$password" -T /usr/bin/codesign >/dev/null 2>&1; then
+            printf '%s\n' 'P12_KEYCHAIN_IMPORT_FAILED' >&2
+            exit 1
+          fi
+          printf '%s\n' 'P12_KEYCHAIN_IMPORT_OK'
 
   package-windows:
     needs: resolve-source
