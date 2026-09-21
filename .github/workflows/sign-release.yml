@@ -187,6 +187,18 @@ jobs:
           submodules: false
           lfs: false
 
+      - name: 公開証明書をCode Signing用途で信頼
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo security add-trusted-cert \
+            -d \
+            -r trustRoot \
+            -p codeSign \
+            -k /Library/Keychains/System.keychain \
+            "$GITHUB_WORKSPACE/config/certificates/macos.cer"
+          security verify-cert -c "$GITHUB_WORKSPACE/config/certificates/macos.cer" -p codeSign
+
       - name: macOS署名と梱包
         env:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}

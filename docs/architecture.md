@@ -28,6 +28,10 @@ source の builder 設定にある app 固有値は中央へ転記せず、中�
 source の root、platform、target の publish は契約で禁止し、公開先の優先順位を source 側へ残しません。
 
 macOS は electron-builder に `CSC_LINK` と `CSC_KEY_PASSWORD` を渡し、一時 keychain の作成と削除を任せます。
+electron-builder は `security find-identity -v` で有効な identity だけを探すため、署名の前に公開証明書を runner の admin 信頼設定へ `codeSign` 用途で登録します。
+自己署名は信頼設定がないと有効な identity として扱われず、`forceCodeSigning` によって署名が失敗します。
+登録対象は使い捨ての runner だけで、証明書を作る本人の端末の信頼設定は変更しません。
+信頼させた公開証明書と `CSC_LINK` の P12 に入っている証明書が同じであることを、署名の前に DER の一致で確認します。
 Windows は `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` だけを使い、中央で SignTool を呼んだり `.dll` や `.node` を総当たりで再署名したりしません。
 秘密値と一時署名ストアの後始末は各処理の終了時に行い、処理と cleanup の両方が失敗した場合は両方を報告します。
 
