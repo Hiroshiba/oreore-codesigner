@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: signing-${{ inputs.repository }}-${{ inputs.tag }}
+  group: signing-smoke-${{ inputs.repository }}-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -30,6 +30,20 @@ jobs:
       channel: ${{ steps.contract.outputs.channel }}
       builder_config: ${{ steps.contract.outputs.builder_config }}
     steps:
+      - name: 検証対象を限定
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/test/macos-signing-smoke-20260922" ||
+            "$REPOSITORY" != "Hiroshiba/hiho-cli-audio" ||
+            "$TAG" != "signing-test-pr13-6b2277a" ]]; then
+            printf '%s\n' '検証対象のref、repository、tagが一致しません' >&2
+            exit 1
+          fi
+
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -46,17 +60,6 @@ jobs:
 
       - name: 中央setup
         run: bash scripts/workflow/setup-central.sh
-
-      - name: default branchからのdispatchだけを許可
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
-            printf 'default branch以外からのdispatchは許可されていません: %s\n' "$GITHUB_REF" >&2
-            exit 1
-          fi
 
       - name: 入力を検証
         id: repository
@@ -116,6 +119,10 @@ jobs:
             printf '%s\n' 'source SHAが40桁ではありません' >&2
             exit 1
           fi
+          if [[ "$source_sha" != "6b2277a2151a996b72fe9858b125564775989f2d" ]]; then
+            printf '%s\n' 'source SHAが審査済みcommitと一致しません' >&2
+            exit 1
+          fi
           printf 'source_sha=%s\n' "$source_sha" >>"$GITHUB_OUTPUT"
 
       - name: source契約を検証
@@ -133,7 +140,6 @@ jobs:
   package-macos:
     needs: resolve-source
     runs-on: macos-14
-    environment: macos-signing
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -206,6 +212,7 @@ jobs:
 
   package-windows:
     needs: resolve-source
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: windows-2022
     environment: windows-signing
     steps:
@@ -281,6 +288,7 @@ jobs:
 
   publish-release:
     needs: [resolve-source, package-macos, package-windows]
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     steps:
       - name: 中央repoをcheckout
