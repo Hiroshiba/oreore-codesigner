@@ -86,6 +86,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# CIで信頼させた公開証明書と署名に使うP12が別物だと、identityが見つからない失敗として現れて原因が読めなくなります
+central_certificate_path="$central_root/config/certificates/macos.cer"
+if [[ ! -f "$central_certificate_path" || -L "$central_certificate_path" ]]; then
+  printf '%s\n' '中央のmacOS公開証明書が通常fileではありません' >&2
+  exit 1
+fi
+p12_path="$work_directory/certificate.p12"
+p12_certificate_path="$work_directory/p12-certificate.cer"
+if ! printf '%s' "$CSC_LINK" | base64 -d > "$p12_path"; then
+  printf '%s\n' 'CSC_LINKはP12をbase64にした値でなければなりません' >&2
+  exit 1
+fi
+openssl pkcs12 -in "$p12_path" -clcerts -nokeys -passin env:CSC_KEY_PASSWORD |
+  openssl x509 -outform DER -out "$p12_certificate_path"
+if ! cmp -s "$central_certificate_path" "$p12_certificate_path"; then
+  printf '%s\n' 'CSC_LINKのP12に入っている証明書が中央のmacOS公開証明書と一致しません' >&2
+  exit 1
+fi
+
 corepack enable
 corepack prepare "$package_manager" --activate
 (

@@ -97,13 +97,19 @@ cleanup() {
   local cleanup_detail=''
 
   trap - EXIT
+  if [[ -n "${verification_keychain_path:-}" && -e "$verification_keychain_path" ]]; then
+    if ! security delete-keychain "$verification_keychain_path" >/dev/null; then
+      cleanup_failed=1
+      cleanup_detail="${cleanup_detail} 検証用keychain削除失敗: $verification_keychain_path"
+    fi
+  fi
   if [[ -d "$temp_directory" ]]; then
     if ! rm -rf -- "$temp_directory"; then
       cleanup_failed=1
       cleanup_detail="${cleanup_detail} 一時directory削除失敗: $temp_directory"
     fi
   fi
-  unset p12_password p12_password_confirmation
+  unset p12_password p12_password_confirmation verification_keychain_password
   if (( cleanup_failed != 0 )); then
     printf 'エラー: cleanupに失敗しました。%s\n' "$cleanup_detail" >&2
     if (( status == 0 )); then
@@ -124,6 +130,7 @@ p12_path="$temp_directory/certificate.p12"
 fingerprint_path="$temp_directory/fingerprint.txt"
 reimport_certificate_pem_path="$temp_directory/reimport-certificate.pem"
 reimport_certificate_der_path="$temp_directory/reimport-certificate.cer"
+verification_keychain_path="$temp_directory/verification.keychain-db"
 
 cat > "$openssl_config_path" <<EOF
 [ req ]
@@ -169,12 +176,16 @@ if [[ ! "$sha1_fingerprint" =~ ^[0-9A-F]{40}$ || ! "$sha256_fingerprint" =~ ^[0-
   fail '証明書のfingerprintを計算できません。'
 fi
 
-if ! security verify-cert -c "$certificate_der_path" -r "$certificate_der_path" -p codeSign >/dev/null 2>&1; then
+if ! security verify-cert -c "$certificate_der_path" -r "$certificate_der_path" -p codeSign >/dev/null; then
   fail 'securityによるCode Signing証明書の検証に失敗しました。'
 fi
 
+# macOSのsecurity importはPBES2とSHA-256 MACのP12を読めないため、PKCS#12の伝統的なPBEとSHA-1 MACで出力します
 openssl pkcs12 \
   -export \
+  -keypbe PBE-SHA1-3DES \
+  -certpbe PBE-SHA1-3DES \
+  -macalg sha1 \
   -inkey "$private_key_path" \
   -in "$certificate_pem_path" \
   -name "$display_name" \
@@ -195,6 +206,23 @@ openssl x509 \
   -out "$reimport_certificate_der_path"
 if ! cmp -s "$certificate_der_path" "$reimport_certificate_der_path"; then
   fail 'P12から再取得した証明書がDER CERと一致しません。'
+fi
+
+verification_keychain_password=$(openssl rand -hex 32)
+if ! security create-keychain -p "$verification_keychain_password" "$verification_keychain_path" >/dev/null; then
+  fail '検証用keychainを作成できません。'
+fi
+if ! security import "$p12_path" \
+  -k "$verification_keychain_path" \
+  -T /usr/bin/codesign \
+  -T /usr/bin/productbuild \
+  -P "$p12_password" >/dev/null; then
+  fail 'securityによるP12の取り込みに失敗しました。'
+fi
+# 自己署名は信頼設定をしないためvalid扱いにはならず、identityとして見つかることだけを確認します
+if ! security find-identity -p codesigning "$verification_keychain_path" |
+  grep -Fq "$sha1_fingerprint \"$display_name\""; then
+  fail '取り込んだP12からCode Signing identityを取得できません。'
 fi
 
 printf 'subject=CN=%s\nsha1_fingerprint=%s\nsha256_fingerprint=%s\nvalidity_days=%s\n' \
