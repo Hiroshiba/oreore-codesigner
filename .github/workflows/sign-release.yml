@@ -16,6 +16,11 @@ on:
         required: false
         type: boolean
         default: false
+      preflight_only:
+        description: Releaseの取得だけを検証し署名と公開を行わない
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,9 +44,15 @@ jobs:
         env:
           REPOSITORY: ${{ inputs.repository }}
           TAG: ${{ inputs.tag }}
+          DIAGNOSE_MACOS_P12: ${{ inputs.diagnose_macos_p12 }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
         shell: bash
         run: |
           set -Eeuo pipefail
+          if [[ "$DIAGNOSE_MACOS_P12" == "true" && "$PREFLIGHT_ONLY" == "true" ]]; then
+            printf '%s\n' 'macOS P12診断とRelease事前確認を同時に指定できません' >&2
+            exit 1
+          fi
           if [[ "$GITHUB_REF" != "refs/heads/test/macos-signing-smoke-20260922" ||
             "$REPOSITORY" != "Hiroshiba/hiho-cli-audio" ||
             "$TAG" != "signing-test-pr13-6b2277a" ]]; then
@@ -155,7 +166,7 @@ jobs:
           private-key: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
           owner: ${{ needs.resolve-source.outputs.owner }}
           repositories: ${{ needs.resolve-source.outputs.repo }}
-          permission-contents: read
+          permission-contents: write
           skip-token-revoke: false
 
       - name: 公開対象のdraft Releaseを検証
@@ -180,9 +191,23 @@ jobs:
             exit 1
           fi
 
+      - name: 公開用CLIでReleaseの取得を検証
+        env:
+          GH_TOKEN: ${{ steps.publish-app-token.outputs.token }}
+          REPOSITORY: ${{ inputs.repository }}
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if ! gh release view "$TAG" --repo "$REPOSITORY" --json tagName,isImmutable |
+            jq -e --arg tag "$TAG" '.tagName == $tag and .isImmutable == false' >/dev/null; then
+            printf '%s\n' '公開用CLIでReleaseのtagまたはimmutable状態を確認できません' >&2
+            exit 1
+          fi
+
   package-macos:
     needs: [resolve-source, preflight-release]
-    if: ${{ inputs.diagnose_macos_p12 != true }}
+    if: ${{ inputs.diagnose_macos_p12 != true && inputs.preflight_only != true }}
     runs-on: macos-14
     steps:
       - name: 中央repoをcheckout
@@ -288,7 +313,7 @@ jobs:
 
   diagnose-macos-p12:
     needs: resolve-source
-    if: ${{ inputs.diagnose_macos_p12 == true }}
+    if: ${{ inputs.diagnose_macos_p12 == true && inputs.preflight_only != true }}
     runs-on: macos-14
     steps:
       - name: 検証対象を限定
@@ -417,7 +442,7 @@ jobs:
 
   package-windows:
     needs: [resolve-source, preflight-release]
-    if: ${{ inputs.diagnose_macos_p12 != true && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/macos-signing-smoke-20260922') }}
+    if: ${{ inputs.diagnose_macos_p12 != true && inputs.preflight_only != true && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/macos-signing-smoke-20260922') }}
     runs-on: windows-2022
     environment: windows-signing
     steps:
@@ -493,7 +518,7 @@ jobs:
 
   publish-release:
     needs: [resolve-source, package-macos, package-windows]
-    if: ${{ inputs.diagnose_macos_p12 != true && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/macos-signing-smoke-20260922') }}
+    if: ${{ inputs.diagnose_macos_p12 != true && inputs.preflight_only != true && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/macos-signing-smoke-20260922') }}
     runs-on: ubuntu-24.04
     steps:
       - name: 中央repoをcheckout
