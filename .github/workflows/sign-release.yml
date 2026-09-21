@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: signing-smoke-${{ inputs.repository }}-${{ inputs.tag }}
+  group: signing-${{ inputs.repository }}-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -142,8 +142,46 @@ jobs:
             printf 'builder_config=%s\n' "$(jq -er '.builder_config' <<<"$contract_json")"
           } >>"$GITHUB_OUTPUT"
 
-  package-macos:
+  preflight-release:
     needs: resolve-source
+    if: ${{ inputs.diagnose_macos_p12 != true }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 公開用App tokenを発行
+        id: publish-app-token
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e
+        with:
+          app-id: ${{ vars.SIGNING_APP_ID }}
+          private-key: ${{ secrets.SIGNING_APP_PRIVATE_KEY }}
+          owner: ${{ needs.resolve-source.outputs.owner }}
+          repositories: ${{ needs.resolve-source.outputs.repo }}
+          permission-contents: write
+          skip-token-revoke: false
+
+      - name: 公開対象のdraft Releaseを検証
+        env:
+          GH_TOKEN: ${{ steps.publish-app-token.outputs.token }}
+          REPOSITORY: ${{ inputs.repository }}
+          TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if ! gh api "repos/$REPOSITORY/releases/392917944" |
+            jq -e --arg tag "$TAG" --arg source_sha "$SOURCE_SHA" '
+              .id == 392917944 and
+              .tag_name == $tag and
+              .draft == true and
+              .immutable == false and
+              .target_commitish == $source_sha and
+              (.assets | type == "array" and length == 0)
+            ' >/dev/null; then
+            printf '%s\n' '公開対象のdraft Releaseが固定条件と一致しません' >&2
+            exit 1
+          fi
+
+  package-macos:
+    needs: [resolve-source, preflight-release]
     if: ${{ inputs.diagnose_macos_p12 != true }}
     runs-on: macos-14
     steps:
@@ -378,8 +416,8 @@ jobs:
           printf '%s\n' 'P12_KEYCHAIN_IMPORT_OK'
 
   package-windows:
-    needs: resolve-source
-    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: [resolve-source, preflight-release]
+    if: ${{ inputs.diagnose_macos_p12 != true && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/macos-signing-smoke-20260922') }}
     runs-on: windows-2022
     environment: windows-signing
     steps:
@@ -455,7 +493,7 @@ jobs:
 
   publish-release:
     needs: [resolve-source, package-macos, package-windows]
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ inputs.diagnose_macos_p12 != true && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/macos-signing-smoke-20260922') }}
     runs-on: ubuntu-24.04
     steps:
       - name: 中央repoをcheckout
@@ -497,6 +535,28 @@ jobs:
           repositories: ${{ needs.resolve-source.outputs.repo }}
           permission-contents: write
           skip-token-revoke: false
+
+      - name: 公開直前にdraft Releaseを再検証
+        env:
+          GH_TOKEN: ${{ steps.publish-app-token.outputs.token }}
+          REPOSITORY: ${{ inputs.repository }}
+          TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if ! gh api "repos/$REPOSITORY/releases/392917944" |
+            jq -e --arg tag "$TAG" --arg source_sha "$SOURCE_SHA" '
+              .id == 392917944 and
+              .tag_name == $tag and
+              .draft == true and
+              .immutable == false and
+              .target_commitish == $source_sha and
+              (.assets | type == "array" and length == 0)
+            ' >/dev/null; then
+            printf '%s\n' '公開対象のdraft Releaseが固定条件と一致しません' >&2
+            exit 1
+          fi
 
       - name: Releaseへassetを公開
         env:
