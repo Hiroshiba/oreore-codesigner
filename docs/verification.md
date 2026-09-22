@@ -2,7 +2,9 @@
 
 静的検査、実際の GitHub Actions、実機での導入と更新を分けて記録します。
 このリポジトリではテストコードを実装せず、CI の静的検査と以下の手動確認を行います。
-実際の証明書による署名・公開と、実機での起動・更新は未検証です。
+[main の Actions 実行 35689941519](https://github.com/Hiroshiba/oreore-codesigner/actions/runs/35689941519)では全ジョブが成功し、実際の証明書による macOS と Windows の署名・公開を確認しました。
+公開先の draft Release で 8 件の asset を確認し、更新 metadata の参照先、サイズ、hash が実ファイルと一致することを確認しました。
+実機での起動・更新は未検証です。
 
 ## 静的検査と GitHub Actions
 

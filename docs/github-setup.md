@@ -7,9 +7,8 @@
 
 1. GitHub App を作成し、Repository permissions の Contents を Read and write にします。Metadata の必須権限を除き、追加の権限は不要です。
 2. App のインストール先を Selected repositories にし、対象アプリのリポジトリを選びます。この選択範囲が署名・公開を許可する対象です。
-3. App ID と秘密鍵を、以下の表に従って中央へ登録します。
+3. App ID、App の秘密鍵、各 OS の署名用証明書とパスワードを、以下の表に従って中央へ登録します。
 4. 中央の既定ブランチ `main` を保護し、ワークフロー、`config/`、署名と公開の実装の変更にレビューを要求します。
-5. `macos-signing` の environment を作成し、承認者を設定して、デプロイ元を `main` に限定します。
 
 | 種類と配置先        | 名前                             | 内容                       |
 | ------------------- | -------------------------------- | -------------------------- |
@@ -23,14 +22,13 @@
 取得と package のジョブは repository の App 設定を使います。macOS と Windows の署名ジョブは repository secret の証明書を参照します。
 package job には対象 repository の read token と、その OS の署名 secret を渡します。公開用 write token は publish job だけが使います。
 
-macOS と Windows の署名 secret は中央の他の workflow や job からも参照でき、`macos-signing` の承認だけでは参照を制限できません。
+macOS と Windows の署名 secret は repository secret として保存され、中央の他の workflow や job からも参照できます。
 中央へ書き込める利用者を信頼できる管理者に限定し、`main` の保護と変更レビューを必須にします。
-`macos-signing` は macOS 署名ジョブの承認に使い、同名の environment secret は置きません。Windows 署名ジョブは environment 承認を待ちません。
 
 App 自体には Contents write が必要ですが、取得用トークンは Contents read、公開用トークンは Contents write に制限して別々に発行します。
 どちらも実行時に指定したリポジトリ一つだけを対象にし、ジョブ終了時に失効させます。
 ワークフローは既定ブランチ以外からの実行を拒否します。
-`macos-signing` の承認者は、対象リポジトリ、タグ、取得時に固定したコミットを確認してください。
+実行後は、対象リポジトリ、タグ、取得時に固定したコミットを確認してください。
 
 ## 証明書の準備
 
