@@ -11,13 +11,13 @@
 | --- | --- | --- |
 | `resolve-source` | 入力した repository と tag を検証し、tag を checkout して commit SHA と source 契約の version、channel、builder config を固定 | 対象リポジトリ一つの Contents read トークン |
 | `package-macos` | 固定 SHA のソースで install、build、electron-builder による署名と ZIP 梱包を実行 | Repository secret の P12 とパスワード、Contents read |
-| `package-windows` | 固定 SHA のソースで install、build、electron-builder による署名と NSIS 梱包を実行 | Windows environment の PFX とパスワード、Contents read |
+| `package-windows` | 固定 SHA のソースで install、build、electron-builder による署名と NSIS 梱包を実行 | Repository secret の PFX とパスワード、Contents read |
 | `publish-release` | 両 OS の成果物、version、更新 metadata、tag SHA、Release 状態を検証して公開 | 対象リポジトリ一つの Contents write トークン |
 
 中央とソースの checkout はいずれも workflow 実行時の中央 SHA または `resolve-source` の固定 SHA を使います。
 両 OS は同じ `source_sha` を checkout し、ソース側で `pnpm install --frozen-lockfile` と `pnpm run build` を実行します。
 公開前に tag の現在 SHA が固定 SHA と一致することを確認します。
-外部 Action はコミット SHA で参照します。
+外部 Action は 40 桁の完全なコミット SHA で参照します。
 
 ## ソース設定の扱い
 
