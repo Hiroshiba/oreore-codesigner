@@ -7,9 +7,9 @@
 
 1. GitHub App の Selected repositories に対象リポジトリを含めます。
 2. 公開するソースへ tag を付け、その tag の GitHub Release をあらかじめ作成します。既存 Release を使う場合は、同名ファイルが置換されることを確認します。
-3. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository` と `tag` を指定します。
-4. macOS と Windows の repository secret が設定済みであることを確認します。`macos-signing` で対象リポジトリ、タグ、固定したコミットを確認して承認します。Windows 署名ジョブは environment 承認なしで実行されます。
-5. 完了後、Release のファイルと[実機検証](verification.md)の結果を確認します。
+3. macOS と Windows の署名に使う repository secret が設定済みであることを確認します。
+4. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository` と `tag` を指定して実行します。
+5. 両 OS の署名と公開が完了したら、対象リポジトリ、タグ、固定したコミット SHA、Release のファイルと[実機検証](verification.md)の結果を確認します。
 
 GitHub CLI では、中央リポジトリの作業ディレクトリから次のように実行します。
 `owner/personal-tool` と `v1.2.3` は対象の値へ置き換えてください。
