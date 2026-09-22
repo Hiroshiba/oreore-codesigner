@@ -8,7 +8,10 @@
 1. GitHub App を作成し、Repository permissions の Contents を Read and write にします。Metadata の必須権限を除き、追加の権限は不要です。
 2. App のインストール先を Selected repositories にし、対象アプリのリポジトリを選びます。この選択範囲が署名・公開を許可する対象です。
 3. App ID、App の秘密鍵、各 OS の署名用証明書とパスワードを、以下の表に従って中央へ登録します。
-4. 中央の既定ブランチ `main` を保護し、ワークフロー、`config/`、署名と公開の実装の変更にレビューを要求します。
+4. 中央の既定ブランチ `main` への変更は PR 経由を必須にし、管理者にも適用します。直接 push、force push、ブランチの削除を禁止します。
+
+必要な承認数は 0 件とし、レビュー承認は必須にしません。
+[verify ワークフロー](../.github/workflows/verify.yml)は PR と `main` への push で実行しますが、CI の成功はマージの必須条件にしません。
 
 | 種類と配置先        | 名前                             | 内容                       |
 | ------------------- | -------------------------------- | -------------------------- |
@@ -22,8 +25,8 @@
 取得と package のジョブは repository の App 設定を使います。macOS と Windows の署名ジョブは repository secret の証明書を参照します。
 package job には対象 repository の read token と、その OS の署名 secret を渡します。公開用 write token は publish job だけが使います。
 
-macOS と Windows の署名 secret は repository secret として保存され、中央の他の workflow や job からも参照できます。
-中央へ書き込める利用者を信頼できる管理者に限定し、`main` の保護と変更レビューを必須にします。
+macOS と Windows の署名 secret は repository secret として保存され、中央の別ブランチを含む他の workflow や job からも参照できます。
+中央へ書き込める利用者を信頼できる管理者に限定し、ワークフロー、`config/`、署名と公開の実装も PR 経由で変更します。
 
 App 自体には Contents write が必要ですが、取得用トークンは Contents read、公開用トークンは Contents write に制限して別々に発行します。
 どちらも実行時に指定したリポジトリ一つだけを対象にし、ジョブ終了時に失効させます。
@@ -51,7 +54,7 @@ base64 にしても秘密情報のため、値をログや文書へ表示しな�
 
 `certificatePath` へ置くのは公開証明書です。
 P12、PFX、平文の秘密鍵をリポジトリへ追加しないでください。
-公開証明書と fingerprint の変更はレビュー対象にします。
+公開証明書と fingerprint の変更も PR 経由で行います。
 利用者がダウンロード先とは別の信頼できる経路で fingerprint を照合できるようにしてください。
 署名の成否は Secrets に登録した証明書と electron-builder の結果で判定します。
 publisher、GUID、icon、entitlements などのアプリ設定は対象ソースの electron-builder 設定を使います。
