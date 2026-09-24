@@ -11,6 +11,10 @@ on:
         description: 対象sourceの固定tag
         required: true
         type: string
+      version:
+        description: 配布するアプリのSemVer version
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -120,10 +124,12 @@ jobs:
 
       - name: source契約を検証
         id: contract
+        env:
+          VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          contract_json=$(pnpm exec tsx src/cli.ts validate-source --source-directory "$GITHUB_WORKSPACE/source")
+          contract_json=$(pnpm exec tsx src/cli.ts validate-source --source-directory "$GITHUB_WORKSPACE/source" --version "$VERSION")
           {
             printf 'version=%s\n' "$(jq -er '.version' <<<"$contract_json")"
             printf 'channel=%s\n' "$(jq -er '.channel' <<<"$contract_json")"

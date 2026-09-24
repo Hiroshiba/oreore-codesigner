@@ -120,14 +120,15 @@ function findBuilderConfig(sourceDirectory: string): string {
 }
 
 /** ソースの最小契約を検証して中央が使う値を返します。 */
-export function validateSourceContract(sourceDirectory: string): SourceContract {
+export function validateSourceContract(sourceDirectory: string, version: string): SourceContract {
   assertDirectory(sourceDirectory);
   const packageJson = readPackageJson(sourceDirectory);
-  const version = parseSemVer(packageJson.version);
+  parseSemVer(packageJson.version);
+  const releaseVersion = parseSemVer(version);
   if (!exactPnpmPattern.test(packageJson.packageManager)) {
     throw new Error("source packageManagerはpnpmのexact specで指定してください");
   }
   assertElectronBuilder(packageJson);
   const builderConfig = findBuilderConfig(sourceDirectory);
-  return { version, channel: channelFromVersion(version), builderConfig };
+  return { version: releaseVersion, channel: channelFromVersion(releaseVersion), builderConfig };
 }

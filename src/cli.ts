@@ -18,7 +18,8 @@ const releaseOptionsSchema = z
   .strict();
 const sourceOptionsSchema = z
   .object({
-    "source-directory": pathSchema
+    "source-directory": pathSchema,
+    version: z.string().min(1, "versionを空にできません")
   })
   .strict();
 const packagedOutputOptionsSchema = z
@@ -43,6 +44,7 @@ function parseOptions(args: string[]): ParsedCommand {
       "assets-directory": { type: "string", multiple: true },
       "expected-version": { type: "string", multiple: true },
       "source-directory": { type: "string", multiple: true },
+      version: { type: "string", multiple: true },
       "output-directory": { type: "string", multiple: true },
       platform: { type: "string", multiple: true },
       channel: { type: "string", multiple: true }
@@ -78,7 +80,7 @@ function runCli(args: string[]): void {
   }
   if (parsed.command === "validate-source") {
     const options = sourceOptionsSchema.parse(parsed.options);
-    const contract = validateSourceContract(options["source-directory"]);
+    const contract = validateSourceContract(options["source-directory"], options.version);
     process.stdout.write(
       `${JSON.stringify({
         version: contract.version,
