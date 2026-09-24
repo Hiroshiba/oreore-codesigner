@@ -1,7 +1,8 @@
 # 個人用 Electron アプリを中央で署名・公開する
 
 自分で管理する Electron アプリを GitHub Actions でビルドし、自己管理の証明書で署名して、指定した GitHub Release へ公開するリポジトリです。
-実行時に対象の `repository` と `tag` を指定します。
+実行時に対象の `repository`、`tag`、配布するアプリの `version` を指定します。
+`version` は既定値のない必須入力で、ソースの `package.json` を版更新せずに配布版を指定できます。
 署名鍵と GitHub App の秘密鍵は、この中央リポジトリだけで管理します。
 
 | OS      | 初回導入                   | アプリ内更新               |
@@ -16,8 +17,8 @@
 
 1. [GitHub の初期設定](docs/github-setup.md)に従い、GitHub App、署名証明書、repository secret を設定します。対象範囲は App の Selected repositories で管理します。
 2. [ソースの要件](docs/source-requirements.md)を確認します。リポジトリのルートにある `package.json`、`pnpm-lock.yaml`、electron-builder の YAML 設定を使い、秘密情報を使わずに x64 のアプリ本体をビルドします。
-3. 対象タグの Release をあらかじめ作成し、[運用手順](docs/operations.md)に従って `sign-release` を実行します。
-4. [端末の初期設定](docs/device-setup.md)を行い、[検証項目](docs/verification.md)に沿って初回導入と旧版からの更新を確認します。
+3. 公開するソースへタグを付け、そのタグの Release をあらかじめ作成します。[運用手順](docs/operations.md)に従って `repository`、`tag`、`version` を入力し、`sign-release` を実行します。
+4. [端末の初期設定](docs/device-setup.md)を行い、[検証項目](docs/verification.md)に沿って初回導入を確認します。アプリ内更新を実装したアプリでは、旧版からの更新も確認します。
 
 中央の [config/signing.json](config/signing.json) には macOS と Windows の公開証明書と fingerprint を登録済みです。
 macOS と Windows の署名ジョブは repository secret にある証明書を electron-builder へ渡し、署名の成否は electron-builder の結果で判定します。

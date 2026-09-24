@@ -31,7 +31,7 @@ macOS と Windows の署名 secret は repository secret として保存され�
 App 自体には Contents write が必要ですが、取得用トークンは Contents read、公開用トークンは Contents write に制限して別々に発行します。
 どちらも実行時に指定したリポジトリ一つだけを対象にし、ジョブ終了時に失効させます。
 ワークフローは既定ブランチ以外からの実行を拒否します。
-実行後は、対象リポジトリ、タグ、取得時に固定したコミットを確認してください。
+実行後は、対象リポジトリ、タグ、取得時に固定したコミット、指定した version を確認してください。
 
 ## 証明書の準備
 
@@ -62,6 +62,7 @@ publisher、GUID、icon、entitlements などのアプリ設定は対象ソー�
 ## 対象アプリと Release
 
 対象アプリが[ソースの要件](source-requirements.md)を満たすことを確認し、タグに対応する GitHub Release をあらかじめ作成します。
+実行時には `repository`、`tag`、`version` を指定します。配布 version を指定するためだけのソース側の版更新は不要です。
 中央は Release を新規作成せず、タイトル、本文、タグ、draft、prerelease の設定も変更しません。
 draft と prerelease に中央独自の制限はありません。
 Immutable Release は変更できないため、公開先には asset を追加・置換できる Release が必要です。

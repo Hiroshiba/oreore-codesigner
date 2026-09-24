@@ -7,12 +7,12 @@
 
 ## ジョブと受け渡すデータ
 
-| ジョブ | 処理 | 使用する秘密情報と権限 |
-| --- | --- | --- |
-| `resolve-source` | 入力した repository と tag を検証し、tag を checkout して commit SHA と source 契約の version、channel、builder config を固定 | 対象リポジトリ一つの Contents read トークン |
-| `package-macos` | 固定 SHA のソースで install、build、electron-builder による署名と ZIP 梱包を実行 | Repository secret の P12 とパスワード、Contents read |
-| `package-windows` | 固定 SHA のソースで install、build、electron-builder による署名と NSIS 梱包を実行 | Repository secret の PFX とパスワード、Contents read |
-| `publish-release` | 両 OS の成果物、version、更新 metadata、tag SHA、Release 状態を検証して公開 | 対象リポジトリ一つの Contents write トークン |
+| ジョブ            | 処理                                                                                                                                          | 使用する秘密情報と権限                               |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `resolve-source`  | 入力した repository、tag、version と source 契約を検証し、tag の commit SHA、入力した version とそこから決まる channel、builder config を固定 | 対象リポジトリ一つの Contents read トークン          |
+| `package-macos`   | 固定 SHA のソースで install、build、electron-builder による署名と ZIP 梱包を実行                                                              | Repository secret の P12 とパスワード、Contents read |
+| `package-windows` | 固定 SHA のソースで install、build、electron-builder による署名と NSIS 梱包を実行                                                             | Repository secret の PFX とパスワード、Contents read |
+| `publish-release` | 両 OS の成果物、version、更新 metadata、tag SHA、Release 状態を検証して公開                                                                   | 対象リポジトリ一つの Contents write トークン         |
 
 中央とソースの checkout はいずれも workflow 実行時の中央 SHA または `resolve-source` の固定 SHA を使います。
 両 OS は同じ `source_sha` を checkout し、ソース側で `pnpm install --frozen-lockfile` と `pnpm run build` を実行します。
@@ -24,8 +24,13 @@
 electron-builder の appId、productName、GUID、publisher、icon、entitlements、artifactName、NSIS 設定、hook はソース側の設定を正本として直接使います。
 中央は対象ソースの設定を再構築せず、ソース側の electron-builder 設定を直接読み込ませます。
 `electron-builder` の CLI には version、channel、OS、x64、出力先、macOS ZIP、通常 NSIS、NSIS Web、root と platform の署名強制、現在の channel だけの更新 metadata、root の対象 Release 用 generic publish URLを指定します。
-source の builder 設定にある app 固有値は中央へ転記せず、中央が所有する公開先と署名必須だけを CLI で上書きします。
+source の builder 設定にある app 固有値は中央へ転記せず、中央が所有する配布条件を CLI で上書きします。
 source の root、platform、target の publish は契約で禁止し、公開先の優先順位を source 側へ残しません。
+
+`validate-source --version` は入力版と root `package.json` の version をそれぞれ SemVer として検証し、入力版から version と channel を確定します。
+両者の一致は要求しません。通常版の channel は `latest`、prerelease は最初の identifier です。
+各 OS は入力版を `extraMetadata.version` で electron-builder へ渡します。
+ソースの `package.json` は書き換えないため、先に実行する `pnpm run build` がその version を直接読む場合はソースの値を使います。
 
 macOS は electron-builder に `CSC_LINK` と `CSC_KEY_PASSWORD` を渡し、一時 keychain の作成と削除を任せます。
 electron-builder は `security find-identity -v` で有効な identity だけを探すため、署名の前に公開証明書を runner の admin 信頼設定へ `codeSign` 用途で登録します。
@@ -42,11 +47,12 @@ Windows は通常 NSIS の installer、外部 blockmap、channel に対応する
 通常 NSIS の metadata は通常 installer を参照し、NSIS Web の成果物は初回導入に使います。
 builder の余分な出力は公開対象へ選びません。artifactName が出力先の下位 directoryを含む場合も、metadata の参照名を使って再帰的に一意な実 file を選び、Release assetのbasenameへ集約します。
 
-resolve-source が検証した root `package.json` の version、channel、builder config を両 OS jobへ同じ値として渡し、各 job は生成 metadataがその versionを参照することを検証します。
+`resolve-source` が確定した入力版の version、channel、ソースの builder config を両 OS job へ同じ値として渡し、各 job は生成 metadata がその version を参照することを検証します。
 
 公開前に両 OS の version、asset の一意性、metadata が参照する実ファイルの存在、サイズ、Base64 の SHA-512、外部 blockmap を検証します。
 metadata に `blockMapSize` がある場合だけ外部 blockmap の実サイズも照合します。
 既存かつ変更可能な Release だけを対象にし、配布ファイルと blockmap を先に、更新 metadata を最後に `gh release upload --clobber` で公開します。
+Release の draft、prerelease などの設定は変更せず、新しい成果物と別名の既存 asset は残します。
 公開処理は原子的ではないため、失敗時は同じ実行の署名済み artifact で再実行します。
 
 初期設定は[GitHub の初期設定](github-setup.md)、アプリ側の準備は[ソースの要件](source-requirements.md)、公開中断時の操作は[運用手順](operations.md)を参照してください。

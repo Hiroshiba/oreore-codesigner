@@ -6,21 +6,41 @@
 ## 公開する
 
 1. GitHub App の Selected repositories に対象リポジトリを含めます。
-2. 公開するソースへ tag を付け、その tag の GitHub Release をあらかじめ作成します。既存 Release を使う場合は、同名ファイルが置換されることを確認します。
-3. macOS と Windows の署名に使う repository secret が設定済みであることを確認します。
-4. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository` と `tag` を指定して実行します。
-5. 両 OS の署名と公開が完了したら、対象リポジトリ、タグ、固定したコミット SHA、Release のファイルと[実機検証](verification.md)の結果を確認します。
+2. [ソースの要件](source-requirements.md)を満たす変更を含む commit に tag を付け、対象リポジトリへ push します。通常版では `v1.2.3`、継続して使う edge 配布先では `edge` などを指定します。対象 commit が要件を満たせば、ソースの既定ブランチへの先行マージは不要です。
+3. その tag の GitHub Release をあらかじめ作成し、用途に合わせて draft、prerelease を設定します。既存 Release を使う場合は、同名ファイルが置換されることを確認します。
+4. macOS と Windows の署名に使う repository secret が設定済みであることを確認します。
+5. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository`、`tag`、`version` を指定して実行します。
+6. 両 OS の署名と公開が完了したら、対象リポジトリ、タグ、固定したコミット SHA、指定した version、Release のファイルと[実機検証](verification.md)の結果を確認します。
+
+`version` は既定値のない必須入力です。先頭に `v` を付けず、SemVer で指定します。
+ソースの `package.json` の `version` と一致させる必要はなく、配布版を変えるためだけの版更新 PR は不要です。
+新しい配布では、既に配布した version より大きい値を指定してください。中央は既存版との大小を検証しません。
+
+| 配布例 | tag      | version        | channel  | 更新 metadata                  |
+| ------ | -------- | -------------- | -------- | ------------------------------ |
+| 通常版 | `v1.2.3` | `1.2.3`        | `latest` | `latest.yml`、`latest-mac.yml` |
+| edge   | `edge`   | `0.1.1-edge.1` | `edge`   | `edge.yml`、`edge-mac.yml`     |
+
+channel は version から決まり、tag の名前や Release の prerelease 設定からは決まりません。
 
 GitHub CLI では、中央リポジトリの作業ディレクトリから次のように実行します。
-`owner/personal-tool` と `v1.2.3` は対象の値へ置き換えてください。
+`owner/personal-tool`、tag、version は対象の値へ置き換えてください。
+通常版を配布する例です。
 
 ```sh
-gh workflow run sign-release.yml -f repository=owner/personal-tool -f tag=v1.2.3
+gh workflow run sign-release.yml -f repository=owner/personal-tool -f tag=v1.2.3 -f version=1.2.3
+```
+
+`edge` の Release へ配布する例です。次の配布では `0.1.1-edge.2` などに version を増やします。
+
+```sh
+gh workflow run sign-release.yml -f repository=owner/personal-tool -f tag=edge -f version=0.1.1-edge.1
 ```
 
 `resolve-source` は tag を checkout して一度だけ source SHA を確定します。
 macOS と Windows は同じ SHA を checkout し、両方の package job が成功したときだけ公開へ進みます。
 公開直前に tag の現在 SHA が同じであることを再確認するため、実行中は tag を移動しないでください。
+`edge` tag を次の配布の commit へ移動する場合も、前の実行を完了させ、新しい dispatch の前に行います。
 同じ repository と tag の実行は concurrency で排他し、進行中の処理は新しい実行によって自動キャンセルしません。
 Actions の外から行う編集まで排他できないため、公開中の Release の手動編集は避けてください。
 
@@ -30,6 +50,7 @@ Immutable Release は変更できません。
 
 同名ファイルは常に `gh release upload --clobber` で置換します。
 新しい成果物と同名でない既存ファイルは削除しません。
+`edge` の Release を再利用すると、旧 version を名前に含む asset は新しい成果物と別名なら残り、同名の `edge.yml` と `edge-mac.yml` は置換されます。
 配布ファイルと blockmap を先に、更新 metadata を最後に公開します。
 更新 metadata が参照する実ファイルの名前、サイズ、Base64 の SHA-512、外部 blockmap、version は公開前に検証します。`blockMapSize` がある場合だけ実サイズも検証します。
 
@@ -62,7 +83,7 @@ Actions artifact には OS ごとの署名済み成果物を保存します。
 公開するファイルは artifact の `payload/` と `metadata/` にあります。
 artifact の保持期間は 7 日です。
 
-検証記録には repository、tag、固定した source SHA、アプリ version、Actions の実行 URL、取得したファイル名を残します。
+検証記録には repository、tag、固定した source SHA、指定した version と channel、ソースの `package.json` の version、Actions の実行 URL、取得したファイル名を残します。
 秘密鍵、パスワード、GitHub App token をログや記録へ含めないでください。
 記録する実機の条件は[検証項目](verification.md)を参照してください。
 
