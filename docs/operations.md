@@ -7,7 +7,13 @@
 ## 公開する
 
 1. GitHub App の Selected repositories に対象リポジトリを含めます。
-2. 公開するソースへ tag を付け、その tag の GitHub Release を draft であらかじめ作成します。公開前の検証は draft Release で行います。既存 Release を使う場合は、公開状態と同名ファイルが置換されることを確認します。
+2. 公開するソースへ tag を付け、その tag の GitHub Release を新規作成するか、既存の draft Release を使います。dispatch 前に次のコマンドを実行し、tag が一致し、draft かつ immutable ではないことを確認します。確認に失敗した場合は dispatch しません。
+
+   ```sh
+   gh release view TAG --repo OWNER/REPO --json tagName,isDraft,isImmutable | jq -e --arg tag TAG '.tagName == $tag and .isDraft and (.isImmutable == false)'
+   ```
+
+   公開前の検証は draft Release で行います。公開済み Release への再実行は通常の公開前ゲートの対象外です。置換した asset は検証前から利用者に見えるため、実施前にその影響を判断してください。公開済み Release を変更前に draft へ戻せるとは限りません。
 3. macOS と Windows の署名に使う repository secret が設定済みであることを確認します。
 4. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository` と `tag` を指定して実行します。
 5. 両 OS の署名とアップロードが完了したら、対象リポジトリ、タグ、固定したコミット SHA、8 件の asset、macOS と通常 NSIS の更新 metadata、署名と[公開前の実機検証](verification.md)を確認します。NSIS Web は installer と package の存在と名前、installer の署名と最終タグの取得 URL を確認します。更新方式と検証結果を記録し、手動更新の初回署名版で旧版がない場合は更新未確認を明記します。
@@ -68,6 +74,7 @@ artifact が削除済みまたは保持期限切れの場合、同じ成果物�
 NSIS Web の取得・導入やアプリ内更新に失敗した場合は、公開後の障害として扱い、利用案内と Latest 指定を止めます。
 公開日時、公開 URL と取得可能だった範囲、失敗した操作とログを記録します。Latest にしなくても取得を防げるわけではありません。
 原因を解消してから最終タグの公開 URL で再確認し、成功を記録します。ファイルのアップロードを修復する場合は、上の再実行手順に従います。
+公開済み Release の修復で再実行する場合も、置換した asset は検証前から利用者に見えます。影響を事前に判断し、この公開後障害手順に沿って対応してください。
 修復できない場合は、配布停止の方法と、既に取得した利用者への案内・復旧対応を決めて実施します。
 
 ## 成果物と記録

@@ -18,7 +18,7 @@
 
 1. [GitHub の初期設定](docs/github-setup.md)に従い、GitHub App、署名証明書、repository secret を設定します。対象範囲は App の Selected repositories で管理します。
 2. [ソースの要件](docs/source-requirements.md)を確認します。リポジトリのルートにある `package.json`、`pnpm-lock.yaml`、electron-builder の YAML 設定を使い、秘密情報を使わずに x64 のアプリ本体をビルドします。
-3. 対象タグの Release をあらかじめ作成し、[運用手順](docs/operations.md)に従って `sign-release` を実行します。
+3. 対象タグの draft Release をあらかじめ作成し、[運用手順](docs/operations.md)に従って `sign-release` を実行します。
 4. [端末の初期設定](docs/device-setup.md)を行い、[検証項目](docs/verification.md)の公開前と公開後の区分に沿って初回導入と、対象アプリの方式で旧版からの更新を確認します。NSIS Web の package 取得と導入、最終タグの公開 URL を使うアプリ内更新は Release 公開後に確認し、結果を記録してから利用を案内します。手動更新の初回署名版で旧版がない場合は、更新を未確認として記録します。
 
 中央の [config/signing.json](config/signing.json) には macOS と Windows の公開証明書と fingerprint を登録済みです。
@@ -51,7 +51,7 @@ macOS で証明書単位の実行許可を試す [system policy profile](experim
 このリポジトリではテストコードを実装しない方針です。
 [verify ワークフロー](.github/workflows/verify.yml)で、format、lint、型、ワークフローとスクリプトの構文を静的に検査します。
 [main の Actions 実行 35689941519](https://github.com/Hiroshiba/oreore-codesigner/actions/runs/35689941519)では全ジョブが成功し、実際の証明書による macOS と Windows の署名・公開を確認しました。
-公開先の draft Release で 8 件の asset を確認し、更新 metadata の参照先、サイズ、hash が実ファイルと一致することを確認しました。
+公開先の draft Release で 8 件の asset を確認しました。macOS と通常 NSIS の更新 metadata が参照する実ファイルについて、参照名、サイズ、hash が一致することを確認しました。
 実機での起動と更新は未検証です。
 アプリ内更新を提供するアプリでは、差分更新と、差分取得に失敗した場合の全量更新も実機確認が必要です。
 
