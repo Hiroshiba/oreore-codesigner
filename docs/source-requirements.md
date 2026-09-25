@@ -70,6 +70,8 @@ GitHub App の秘密鍵や中央の公開用 token をアプリへ埋め込ん�
 macOS の更新は ZIP、Windows の更新は通常 NSIS を使います。
 Windows は `disableWebInstaller=true` を設定し、更新クライアントが NSIS Web を取得しないようにします。
 NSIS Web の installer と 7z package は初回導入用です。
+installer は最終タグの Release URL から認証なしで package を取得するため、取得と導入は draft 中には確認できません。Release 公開後に[実機検証](verification.md)を行います。
 
 更新対象はインストール済みより大きいアプリバージョンにします。
-旧版からのアプリ内更新、差分更新の成功、差分取得に失敗した場合の全量更新、改変・期待しない署名への拒否は、[実機検証](verification.md)で確認してから利用者へ公開してください。
+旧版からのアプリ内更新、差分更新の成功、差分取得に失敗した場合の全量更新、改変・期待しない署名への拒否は、[実機検証](verification.md)で確認してください。
+最終タグの公開 URL を使う更新経路は Release 公開後に確認し、結果を記録してから利用を案内します。公開前に行う検証と、公開後に失敗した場合の対応は[運用手順](operations.md)に従います。

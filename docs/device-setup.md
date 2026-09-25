@@ -3,6 +3,7 @@
 この手順は、本人が管理する端末で本人が実施します。
 署名済みアプリを導入する前に、配布元と公開証明書の fingerprint を確認してください。
 更新方式と更新手順は、対象アプリの README を確認してください。
+管理者の実機検証は[検証項目](verification.md)の公開前と公開後の区分に従います。最終タグの公開 URL を使うアプリ内更新は Release 公開後に確認します。
 手動更新の初回署名版で旧版がない場合は、導入と起動を確認し、更新は未確認として記録します。
 端末へ入れるのは公開証明書だけです。
 P12、PFX、秘密鍵、CI のパスワードを利用者へ配布しません。
@@ -46,7 +47,7 @@ Get-FileHash -LiteralPath .\certificate.cer -Algorithm SHA256
 1. 公開証明書の fingerprint、有効期限、発行先を確認します。
 2. `scripts/certificates/install-windows-trust.ps1` を使い、公開証明書を `CurrentUser` の Root と TrustedPublisher へ登録します。`-CertificatePath` に `certificate.cer`、`-Fingerprint` に確認済みの SHA-1 fingerprint を指定します。
 3. ブラウザーで対象 Release の通常 NSIS または NSIS Web インストーラーをダウンロードします。Mark of the Web を残したまま、デジタル署名の署名者と証明書を確認します。
-4. インストーラーを実行し、初回導入を完了します。NSIS Web を使う場合は、インストーラーが参照するパッケージにもアクセスできることを確認します。
+4. インストーラーを実行し、初回導入を完了します。NSIS Web を使う場合は、Release 公開後に GitHub 認証なしで最終タグのパッケージを取得し、導入、起動と主要機能を確認します。draft Release のパッケージは取得できません。
 5. 次のバージョンへの更新を[検証手順](verification.md)で確認します。手動更新では、新版の通常 NSIS の配布元と署名を確認し、旧版を終了して実行した後、version、起動、設定と利用者データの保持を確認します。アプリ内更新では、通常 NSIS を使うことを更新ログとダウンロードしたファイルで確認します。
 
 登録対象は現在の利用者だけで、管理者権限は不要です。
