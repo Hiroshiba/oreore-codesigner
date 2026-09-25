@@ -3,14 +3,15 @@
 対象は、リポジトリのルートで pnpm と electron-builder を使う Electron アプリです。
 公開対象の範囲は GitHub App の Selected repositories で管理し、実行時に `repository` と `tag` を指定します。
 ソースのコード、依存関係、ビルド hook は管理者が信頼する前提です。
+手動更新とアプリ内更新のどちらも対象とし、ビルド、署名、成果物の要件は共通です。
 
 ## ビルドに必要なファイル
 
-| ファイル | 必要な内容 |
-| --- | --- |
-| `package.json` | `name`、中央が採用するSemVerの `version`、exact `packageManager`、`build` script、electron-builder 26.16.1 の依存関係 |
-| `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` が通る依存関係 |
-| `electron-builder.yml` または `electron-builder.yaml` | `appId`、`productName`、macOS と Windows の対象設定 |
+| ファイル                                              | 必要な内容                                                                                                            |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `package.json`                                        | `name`、中央が採用するSemVerの `version`、exact `packageManager`、`build` script、electron-builder 26.16.1 の依存関係 |
+| `pnpm-lock.yaml`                                      | `pnpm install --frozen-lockfile` が通る依存関係                                                                       |
+| `electron-builder.yml` または `electron-builder.yaml` | `appId`、`productName`、macOS と Windows の対象設定                                                                   |
 
 `packageManager` は `pnpm@10.30.2` のようにアプリが使う pnpm の exact spec を固定します。
 `electron-builder` は `devDependencies` にだけ 26.16.1 を exact に指定し、`dependencies`、`optionalDependencies`、`peerDependencies` には配置せず、`scripts.build` を必須にします。
@@ -51,10 +52,26 @@ macOS は ZIP、外部 blockmap、channel に対応する `*-mac.yml` の更新 
 通常 NSIS の更新 metadata は通常 installer を参照します。
 余分なbuilder出力は無視し、artifactNameが下位directoryを含む場合はmetadata参照名から再帰的に一意な実fileを選んでRelease assetのbasenameへ集約します。
 
-## アプリ内更新
+## 更新方式
 
-アプリ側へ `electron-updater` と更新先を組み込み、起動後の確認、ダウンロード、再起動時の適用を既存 UI とエラー処理へ接続します。
+対象アプリの README に、手動更新とアプリ内更新のどちらを採用するかと、利用者向けの更新手順を記載します。
+手動更新の場合、`electron-updater` の組み込みは必須ではありません。
+中央の CLI は更新方式や更新クライアントの実装を検査しないため、採用した方式に沿って[実機検証](verification.md)を行います。
+
+すでにアプリ内更新を使うクライアントを配布している場合は、手動更新へ切り替える前に、既存クライアントの更新先、利用者への案内、設定と利用者データを保持する移行手順を確認します。
+初回の署名付き配布で更新元がない場合は、導入を確認したうえで「更新未確認」と記録し、次のバージョンで更新を検証します。
+
+### 手動更新
+
+macOS はアプリを終了し、新しい ZIP を展開して既存のアプリを置き換えます。
+Windows は新しい通常 NSIS インストーラーで既存アプリへ再導入します。
+どちらも更新後の起動、バージョン、設定と利用者データの保持を確認します。
+
+### アプリ内更新
+
+この方式を採用するアプリは、`electron-updater` と更新先を組み込み、起動後の確認、ダウンロード、再起動時の適用を既存 UI とエラー処理へ接続します。
 梱包時の generic publish URL は実行時の repository と tag の Release を指します。
+この URL だけでは旧版から新しい tag を発見できないため、旧版が新タグの Release URL へ到達する経路をアプリ側で用意し、実機で確認します。
 GitHub App の秘密鍵や中央の公開用 token をアプリへ埋め込んではいけません。
 
 macOS の更新は ZIP、Windows の更新は通常 NSIS を使います。

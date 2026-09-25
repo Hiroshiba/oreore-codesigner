@@ -4,6 +4,7 @@
 署名済みアプリを導入する前に、配布元と公開証明書の fingerprint を確認してください。
 端末へ入れるのは公開証明書だけです。
 P12、PFX、秘密鍵、CI のパスワードを利用者へ配布しません。
+更新方式と利用者向けの手順は、対象アプリの README で確認します。
 
 公開証明書の SHA-256 fingerprint は、ダウンロードした証明書自身の表示だけで確認を終えず、ダウンロード先とは別の信頼できる経路で確認した値と照合します。
 Windows の証明書画面に出る SHA-1 の thumbprint と SHA-256 fingerprint は別の値です。
@@ -23,7 +24,7 @@ openssl x509 -inform DER -in certificate.cer -noout -fingerprint -sha256
 3. ブラウザーで対象 Release の ZIP をダウンロードします。quarantine 属性を残したまま展開し、アプリを Applications へ移します。
 4. アプリを起動します。自己署名だけでは Gatekeeper の標準許可にならないため、警告が出る場合があります。
 5. 配布元と署名を確認したうえで利用する場合は、macOS が提供する個別アプリの許可操作を行います。操作場所は macOS のバージョンにより異なり、システム設定の「プライバシーとセキュリティ」で案内されることがあります。
-6. 起動と主要機能を確認し、次のバージョンへ ZIP 更新できることを[検証手順](verification.md)で確認します。
+6. 起動と主要機能を確認します。手動更新はアプリを終了し、新しい ZIP を展開して既存アプリを置き換えます。アプリ内更新は対象アプリの手順で行い、どちらも更新後の起動、バージョン、設定と利用者データの保持を[検証手順](verification.md)で確認します。
 
 証明書の取り込みと、初回起動時の Gatekeeper の許可は別です。
 証明書を取り込むだけで同じ証明書のすべてのアプリが自動的に起動を許可されるとは扱いません。
@@ -45,7 +46,7 @@ Get-FileHash -LiteralPath .\certificate.cer -Algorithm SHA256
 2. `scripts/certificates/install-windows-trust.ps1` を使い、公開証明書を `CurrentUser` の Root と TrustedPublisher へ登録します。`-CertificatePath` に `certificate.cer`、`-Fingerprint` に確認済みの SHA-1 fingerprint を指定します。
 3. ブラウザーで対象 Release の通常 NSIS または NSIS Web インストーラーをダウンロードします。Mark of the Web を残したまま、デジタル署名の署名者と証明書を確認します。
 4. インストーラーを実行し、初回導入を完了します。NSIS Web を使う場合は、インストーラーが参照するパッケージにもアクセスできることを確認します。
-5. 次のバージョンへの更新が通常 NSIS を使うことを、更新ログとダウンロードしたファイルで確認します。
+5. 起動と主要機能を確認します。手動更新は新しい通常 NSIS インストーラーで既存アプリへ再導入します。アプリ内更新は対象アプリの手順で行い、通常 NSIS を使うことを更新ログと取得したファイルで確認します。どちらも更新後の起動、バージョン、設定と利用者データの保持を[検証手順](verification.md)で確認します。
 
 登録対象は現在の利用者だけで、管理者権限は不要です。
 スクリプトの `-Fingerprint` は `fingerprint.txt` の `sha1_fingerprint` に対応する、区切りなしの 40 桁の値です。
