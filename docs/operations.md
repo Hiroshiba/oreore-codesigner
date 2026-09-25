@@ -2,14 +2,18 @@
 
 この手順は中央リポジトリと対象アプリを管理する本人が行います。
 初回は[GitHub の初期設定](github-setup.md)と[ソースの要件](source-requirements.md)を確認してください。
+更新方式を対象アプリの README で確認し、共通要件と、その方式の要件を満たしてから利用者へ公開します。
 
 ## 公開する
 
 1. GitHub App の Selected repositories に対象リポジトリを含めます。
-2. 公開するソースへ tag を付け、その tag の GitHub Release をあらかじめ作成します。既存 Release を使う場合は、同名ファイルが置換されることを確認します。
+2. 公開するソースへ tag を付け、その tag の GitHub Release をあらかじめ作成します。検証は検証用または draft Release で行い、検証前は利用者向けに公開しません。既存 Release を使う場合は、同名ファイルが置換されることを確認します。
 3. macOS と Windows の署名に使う repository secret が設定済みであることを確認します。
 4. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository` と `tag` を指定して実行します。
-5. 両 OS の署名と公開が完了したら、対象リポジトリ、タグ、固定したコミット SHA、Release のファイルと[実機検証](verification.md)の結果を確認します。
+5. 両 OS の署名とアップロードが完了したら、対象リポジトリ、タグ、固定したコミット SHA、Release のファイルと[実機検証](verification.md)の結果を確認し、更新方式と検証結果を記録してから利用者へ公開します。手動更新の初回署名版で旧版がない場合は、更新未確認を明記します。
+
+手動更新へ切り替える場合は、実行前に過去の自動更新クライアントの配布履歴と更新経路を確認します。
+手動更新でも更新 metadata は公開されるため、旧版がそれを取得する場合の影響と移行手順を記録してください。
 
 GitHub CLI では、中央リポジトリの作業ディレクトリから次のように実行します。
 `owner/personal-tool` と `v1.2.3` は対象の値へ置き換えてください。
@@ -62,9 +66,9 @@ Actions artifact には OS ごとの署名済み成果物を保存します。
 公開するファイルは artifact の `payload/` と `metadata/` にあります。
 artifact の保持期間は 7 日です。
 
-検証記録には repository、tag、固定した source SHA、アプリ version、Actions の実行 URL、取得したファイル名を残します。
+検証記録には repository、tag、固定した source SHA、アプリ version、更新方式、Actions の実行 URL、取得したファイル名を残します。
 秘密鍵、パスワード、GitHub App token をログや記録へ含めないでください。
 記録する実機の条件は[検証項目](verification.md)を参照してください。
 
 証明書を更新するときは、macOS または Windows の repository secret と、公開証明書、`config/signing.json` の対応を確認します。
-同じ表示名の新しい証明書でも既存アプリから更新できるとは限らないため、配布前に旧版からの更新を実機で確認してください。
+同じ表示名の新しい証明書でも既存アプリから更新できるとは限らないため、配布前に対象アプリの方式で旧版からの更新を実機で確認してください。

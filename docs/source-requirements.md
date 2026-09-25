@@ -51,15 +51,25 @@ macOS は ZIP、外部 blockmap、channel に対応する `*-mac.yml` の更新 
 通常 NSIS の更新 metadata は通常 installer を参照します。
 余分なbuilder出力は無視し、artifactNameが下位directoryを含む場合はmetadata参照名から再帰的に一意な実fileを選んでRelease assetのbasenameへ集約します。
 
-## アプリ内更新
+## 更新方式
 
-アプリ側へ `electron-updater` と更新先を組み込み、起動後の確認、ダウンロード、再起動時の適用を既存 UI とエラー処理へ接続します。
-梱包時の generic publish URL は実行時の repository と tag の Release を指します。
+ソースの README に、手動更新とアプリ内更新のどちらを提供するかと、利用者の更新手順を明記します。
+ビルド、署名、成果物と更新 metadata の整合要件は、どちらの方式にも適用します。
+手動更新でも blockmap と更新 metadata は生成・公開されますが、アプリ内更新の実装や動作を示すものではありません。
 GitHub App の秘密鍵や中央の公開用 token をアプリへ埋め込んではいけません。
 
+手動更新では、macOS は新版の ZIP でアプリを置換し、Windows は新版の通常 NSIS を実行します。
+両 OS で配布元と署名を人手で確認し、旧版からの手動再導入後に version、起動、設定と利用者データの保持を[実機検証](verification.md)で確認してから利用者へ公開します。
+初回署名版で旧版がない場合は更新検証を未確認として記録し、導入・起動の成功を更新成功とは扱いません。
+同じアプリの自動更新クライアントを過去に配布していた場合は、手動更新へ切り替える前に旧版の配布履歴と更新経路を確認します。
+旧版が新しい Release の metadata を読める場合があるため、既存利用者への影響と移行手順を確認してください。
+
+アプリ内更新を提供する場合は、アプリ側へ `electron-updater` と更新先を組み込み、起動後の確認、ダウンロード、再起動時の適用を既存 UI とエラー処理へ接続します。
+梱包時の generic publish URL は実行時の repository と tag の Release を指し、新しい tag の自動発見は保証しません。
+旧版が新版を取得できる更新先の設定と更新経路を確認してください。
 macOS の更新は ZIP、Windows の更新は通常 NSIS を使います。
 Windows は `disableWebInstaller=true` を設定し、更新クライアントが NSIS Web を取得しないようにします。
 NSIS Web の installer と 7z package は初回導入用です。
 
 更新対象はインストール済みより大きいアプリバージョンにします。
-差分更新の成功と、差分取得に失敗した場合の全量更新は、[実機検証](verification.md)で確認してください。
+旧版からのアプリ内更新、差分更新の成功、差分取得に失敗した場合の全量更新、改変・期待しない署名への拒否は、[実機検証](verification.md)で確認してから利用者へ公開してください。
