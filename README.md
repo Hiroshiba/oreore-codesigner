@@ -4,20 +4,23 @@
 実行時に対象の `repository` と `tag` を指定します。
 署名鍵と GitHub App の秘密鍵は、この中央リポジトリだけで管理します。
 
-| OS      | 初回導入                   | アプリ内更新               |
-| ------- | -------------------------- | -------------------------- |
-| macOS   | ZIP を展開してアプリを配置 | ZIP と更新メタデータ       |
-| Windows | 通常 NSIS または NSIS Web  | 通常 NSIS と更新メタデータ |
+| OS      | 初回導入                   | 手動更新                  | アプリ内更新               |
+| ------- | -------------------------- | ------------------------- | -------------------------- |
+| macOS   | ZIP を展開してアプリを配置 | 新しい ZIP でアプリを置換 | ZIP と更新メタデータ       |
+| Windows | 通常 NSIS または NSIS Web  | 新しい通常 NSIS で再導入  | 通常 NSIS と更新メタデータ |
 
+更新方式は対象アプリごとに選び、対象アプリの README に方式と利用者向けの手順を記載します。
 アプリ内更新には、対象アプリでの `electron-updater` の組み込みと更新先の設定が必要です。
+手動更新では `electron-updater` は必須ではありません。
 署名済みファイルを公開するだけでは、アプリ内更新は有効になりません。
 
 ## 導入と公開
 
 1. [GitHub の初期設定](docs/github-setup.md)に従い、GitHub App、署名証明書、repository secret を設定します。対象範囲は App の Selected repositories で管理します。
 2. [ソースの要件](docs/source-requirements.md)を確認します。リポジトリのルートにある `package.json`、`pnpm-lock.yaml`、electron-builder の YAML 設定を使い、秘密情報を使わずに x64 のアプリ本体をビルドします。
-3. 対象タグの Release をあらかじめ作成し、[運用手順](docs/operations.md)に従って `sign-release` を実行します。
-4. [端末の初期設定](docs/device-setup.md)を行い、[検証項目](docs/verification.md)に沿って初回導入と旧版からの更新を確認します。
+3. 初回公開では対象タグの draft Release を作成し、[運用手順](docs/operations.md)に従って `sign-release` を実行します。
+4. [端末の初期設定](docs/device-setup.md)を行い、draft のまま署名、8 件の配布ファイル、ZIP と通常 NSIS による実機導入を確認します。
+5. Release を公開し、認証なしでの NSIS Web の取得と導入を確認します。採用した方式で旧版からの更新も[検証項目](docs/verification.md)に沿って確認してから、利用者へ案内します。更新元がない初回の署名付き配布は「更新未確認」と記録します。
 
 中央の [config/signing.json](config/signing.json) には macOS と Windows の公開証明書と fingerprint を登録済みです。
 macOS と Windows の署名ジョブは repository secret にある証明書を electron-builder へ渡し、署名の成否は electron-builder の結果で判定します。
@@ -49,9 +52,9 @@ macOS で証明書単位の実行許可を試す [system policy profile](experim
 このリポジトリではテストコードを実装しない方針です。
 [verify ワークフロー](.github/workflows/verify.yml)で、format、lint、型、ワークフローとスクリプトの構文を静的に検査します。
 [main の Actions 実行 35689941519](https://github.com/Hiroshiba/oreore-codesigner/actions/runs/35689941519)では全ジョブが成功し、実際の証明書による macOS と Windows の署名・公開を確認しました。
-公開先の draft Release で 8 件の asset を確認し、更新 metadata の参照先、サイズ、hash が実ファイルと一致することを確認しました。
+公開先の draft Release で 8 件の asset を確認し、macOS ZIP と通常 NSIS の更新 metadata の参照先、サイズ、hash が実ファイルと一致することを確認しました。
 実機での起動と更新は未検証です。
-差分更新と、差分取得に失敗した場合の全量更新も実機確認が必要です。
+手動更新ではアプリの置換・再導入とデータ保持を、アプリ内更新では新タグの Release への到達、差分更新、差分取得に失敗した場合の全量更新も実機で確認します。
 
 証明書の生成方法は[証明書ツール](scripts/certificates/README.md)、実機で残す記録は[検証項目](docs/verification.md)を参照してください。
 不具合は秘密情報を含めず、対象 OS、アプリのバージョン、失敗した操作とログを添えて [GitHub Issues](https://github.com/Hiroshiba/oreore-codesigner/issues)へ報告してください。
