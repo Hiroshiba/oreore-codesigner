@@ -24,6 +24,7 @@
 
 中央の [config/signing.json](config/signing.json) には macOS と Windows の公開証明書と fingerprint を登録済みです。
 macOS と Windows の署名ジョブは repository secret にある証明書を electron-builder へ渡し、署名の成否は electron-builder の結果で判定します。
+macOS は公開対象 ZIP 内の主実行ファイルも確認し、Hardened Runtime が有効で Team ID がなく、`com.apple.security.cs.disable-library-validation` が true でない場合は公開前に停止します。
 このリポジトリには秘密鍵を含めません。
 
 指定した Release の同名ファイルは常に上書きします。
@@ -53,7 +54,9 @@ macOS で証明書単位の実行許可を試す [system policy profile](experim
 [verify ワークフロー](.github/workflows/verify.yml)で、format、lint、型、ワークフローとスクリプトの構文を静的に検査します。
 [main の Actions 実行 35689941519](https://github.com/Hiroshiba/oreore-codesigner/actions/runs/35689941519)では全ジョブが成功し、実際の証明書による macOS と Windows の署名・公開を確認しました。
 公開先の draft Release で 8 件の asset を確認し、macOS ZIP と通常 NSIS の更新 metadata の参照先、サイズ、hash が実ファイルと一致することを確認しました。
-実機での起動と更新は未検証です。
+中央証明書で署名した配布物の実機での起動と更新は未検証です。
+macOS の署名条件検査は GUI 起動や Framework の読み込みを確認するものではありません。
+これらは[検証項目](docs/verification.md)に沿って実機で確認します。
 手動更新ではアプリの置換・再導入とデータ保持を、アプリ内更新では新タグの Release への到達、差分更新、差分取得に失敗した場合の全量更新も実機で確認します。
 
 証明書の生成方法は[証明書ツール](scripts/certificates/README.md)、実機で残す記録は[検証項目](docs/verification.md)を参照してください。

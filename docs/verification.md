@@ -4,7 +4,7 @@
 このリポジトリではテストコードを実装せず、CI の静的検査と以下の手動確認を行います。
 [main の Actions 実行 35689941519](https://github.com/Hiroshiba/oreore-codesigner/actions/runs/35689941519)では全ジョブが成功し、実際の証明書による macOS と Windows の署名・公開を確認しました。
 公開先の draft Release で 8 件の asset を確認し、macOS ZIP と通常 NSIS の更新 metadata の参照先、サイズ、hash が実ファイルと一致することを確認しました。
-実機での起動・更新は未検証です。
+中央証明書で署名した配布物の実機での起動・更新は未検証です。
 
 対象アプリの README で更新方式と利用者向けの手順を確認します。
 手動更新では置換・再導入を、アプリ内更新では新タグへの到達と差分・全量更新を検証します。
@@ -25,6 +25,7 @@
 | source契約           | SemVer version、exact pnpm、electron-builder 26.16.1、build script、単一YAML、publish禁止、versionからのchannelが検証される                                    |
 | ビルド               | source で frozen install、build、electron-builder が成功し、source の設定と hook が成果物へ反映される                                                          |
 | macOS 署名           | electron-builder の署名が成功し、ZIP、blockmap、更新 metadata が生成される                                                                                     |
+| macOS 署名条件       | 公開対象 ZIP の主実行ファイルから署名条件を取得し、Team ID のない Hardened Runtime で entitlement が true でなければ停止する                                   |
 | Windows 署名         | electron-builder の署名が成功し、通常 NSIS、blockmap、channel に対応する root metadata、NSIS Web metadataに対応する installer、`.nsis.7z` package が生成される |
 | 成果物選択           | metadataの参照名から下位directoryを含む成果物を一意に選び、余分な builder 出力を公開しない                                                                     |
 | 更新 metadata        | macOS ZIP と通常 NSIS の実ファイルの参照、サイズ、Base64 の SHA-512、外部 blockmap、version が一致する。`blockMapSize` がある場合だけ実サイズも一致する        |
@@ -53,6 +54,8 @@ draft の間は匿名で NSIS Web の package やアプリ内更新のファイ�
 更新を検証するときは、連続する二つのアプリ version を用意します。
 初回導入はブラウザーで取得した ZIP を使い、quarantine 属性を保持します。
 共通項目と、採用した更新方式および旧版からの移行に使う方式の項目を確認します。
+中央の署名条件検査は主実行ファイルの既知の組合せだけを扱います。
+GUI 起動時に Framework、Helper、ネイティブモジュールが読み込めるかは実機で確認します。
 
 | 確認対象                     | 合格条件                                                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |

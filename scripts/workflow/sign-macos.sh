@@ -151,6 +151,7 @@ blockmap_relative_path=$(jq -er '.blockmap | select(type == "string")' <<<"$pack
 metadata_path="$builder_output/$metadata_name"
 artifact_path="$builder_output/$artifact_relative_path"
 blockmap_path="$builder_output/$blockmap_relative_path"
+bash "$script_directory/validate-macos-library-validation.sh" "$artifact_path" "$work_directory/macos-library-validation"
 payload_directory="$release_output_directory/payload"
 metadata_directory="$release_output_directory/metadata"
 mkdir -p -- "$payload_directory" "$metadata_directory"
