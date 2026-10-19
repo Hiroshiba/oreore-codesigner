@@ -38,6 +38,8 @@ Windows は `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` だけを使い、中央で 
 ## 成果物と公開
 
 macOS は ZIP、外部 blockmap、channel に対応する root の `*-mac.yml` 更新 metadata を生成します。
+選択した ZIP を展開して app の主実行ファイルから署名情報を取得し、Hardened Runtime が有効で Team ID がなく `com.apple.security.cs.disable-library-validation` が true でない場合は、公開用成果物の作成前に停止します。
+署名情報や entitlements の取得・解析に失敗した場合も停止します。
 Windows は通常 NSIS の installer、外部 blockmap、channel に対応する root の更新 metadata と、`nsis-web` 配下の metadata を基準に選ぶ installer、`.nsis.7z` package を生成します。
 通常 NSIS の metadata は通常 installer を参照し、NSIS Web の成果物は初回導入に使います。
 builder の余分な出力は公開対象へ選びません。artifactName が出力先の下位 directoryを含む場合も、metadata の参照名を使って再帰的に一意な実 file を選び、Release assetのbasenameへ集約します。

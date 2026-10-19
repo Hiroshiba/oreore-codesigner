@@ -44,6 +44,9 @@ electron-builder --win nsis nsis-web --x64 --publish never
 ## 署名と成果物
 
 macOS のジョブは repository secret の P12 を `CSC_LINK`、パスワードを `CSC_KEY_PASSWORD` として electron-builder へ渡します。
+Hardened Runtime が有効で Team ID がない場合、主実行ファイルの `com.apple.security.cs.disable-library-validation` をソース側の `mac.entitlements` が参照するファイルで true にしてください。
+中央は公開対象 ZIP 内の主実行ファイルからこれらの署名条件を確認し、満たさない ZIP を公開用成果物へ移しません。
+中央で entitlements を付与・上書きしません。
 
 Windows のジョブは PFX とパスワードを `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` として electron-builder へ渡します。
 署名 hash、publisher、GUID、NSIS 設定はソース側の設定を使います。
