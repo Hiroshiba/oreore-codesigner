@@ -12,8 +12,8 @@
 2. 対象アプリの README に更新方式と利用者向けの手順を記載し、公開するソースへ tag を付け、その tag の GitHub Release をあらかじめ作成します。初回公開は draft にします。既存 Release を使う場合は、同名ファイルが置換されることを確認します。
 3. macOS と Windows の署名に使う repository secret が設定済みであることを確認します。
 4. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository` と `tag` を指定して実行します。
-5. 両 OS の署名とアップロードが完了したら、対象リポジトリ、タグ、固定したコミット SHA、署名と配布する 8 件の asset を確認します。macOS は ZIP、blockmap、更新 metadata の 3 件、Windows は通常 NSIS、blockmap、更新 metadata、NSIS Web installer、`.nsis.7z` package の 5 件です。
-6. 初回公開は draft のまま、管理者が ZIP と通常 NSIS をブラウザーで取得し、署名、実機導入、起動、バージョンと主要機能を確認します。NSIS Web installer の署名も確認します。
+5. 両 OS の署名とアップロードが完了したら、対象リポジトリ、タグ、固定したコミット SHA、署名と配布する 9 件の asset を確認します。macOS は DMG、ZIP、ZIP の blockmap、更新 metadata の 4 件、Windows は通常 NSIS、blockmap、更新 metadata、NSIS Web installer、`.nsis.7z` package の 5 件です。
+6. 初回公開は draft のまま、管理者が DMG と通常 NSIS をブラウザーで取得し、署名、実機導入、起動、バージョンと主要機能を確認します。NSIS Web installer の署名も確認します。
 7. 管理者が Release を公開し、認証なしで全配布ファイルを取得できることと、NSIS Web installer による package の取得・導入を確認します。更新元がある場合は、採用した方式と公開前に確認した移行条件に沿って旧版からの更新を[実機検証](verification.md)で確認します。アプリ内更新を使う経路では新タグの Release URL への到達と差分・全量更新を確認します。
 8. 確認後に利用者への案内を始めます。初回の署名付き配布で更新元がない場合は「更新未確認」と記録し、次のバージョンで確認します。公開後の取得や導入・更新に失敗した場合は案内を停止し、原因の解消と修復、再確認を行います。
 
@@ -42,6 +42,7 @@ Immutable Release は変更できません。
 新しい成果物と同名でない既存ファイルは削除しません。
 配布ファイルと blockmap を先に、更新 metadata を最後に公開します。
 macOS ZIP と通常 NSIS の更新 metadata が参照する実ファイルの名前、サイズ、Base64 の SHA-512、外部 blockmap、version は公開前に検証します。`blockMapSize` がある場合だけ実サイズも検証します。
+macOS の更新 metadata は ZIP 一件だけを参照し、DMG は初回導入用の独立した asset として一件だけ公開します。DMG 内の app と Applications へのリンク、署名、ZIP 内 app との CDHash 一致は公開用成果物の作成前に検証します。
 NSIS Web の installer と package の hash や package の実サイズは中央で照合しません。検査範囲と実機での確認は[検証項目](verification.md)を参照してください。
 
 ## 失敗した公開を再実行する

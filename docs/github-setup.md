@@ -62,7 +62,7 @@ publisher、GUID、icon、entitlements などのアプリ設定は対象ソー�
 ## 対象アプリと Release
 
 対象アプリが[ソースの要件](source-requirements.md)を満たし、README に更新方式と利用者向けの手順が記載されていることを確認します。
-初回公開ではタグに対応する draft Release をあらかじめ作成し、署名と配布ファイル、ZIP と通常 NSIS による実機導入を確認してから公開します。
+初回公開ではタグに対応する draft Release をあらかじめ作成し、署名と配布ファイル、DMG と通常 NSIS による実機導入を確認してから公開します。
 公開後は認証なしでの NSIS Web の取得と導入を確認します。更新元がある場合は採用した方式での更新も確認し、利用者への案内を始めます。
 中央は Release を新規作成せず、タイトル、本文、タグ、draft、prerelease の設定も変更しません。
 初回公開の draft は運用上の手順です。中央は draft を強制せず、公開済み Release の修復も許可します。

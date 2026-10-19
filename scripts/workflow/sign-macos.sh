@@ -121,7 +121,7 @@ mkdir -p -- "$builder_output"
   cd -- "$source_directory"
   pnpm exec electron-builder \
     --config "$source_directory/$builder_config" \
-    --mac zip \
+    --mac zip dmg \
     --x64 \
     --publish never \
     "--config.directories.output=$builder_output" \
@@ -139,22 +139,25 @@ mkdir -p -- "$builder_output"
 
 packaged_output=$(
   cd -- "$central_root"
-  pnpm exec tsx src/cli.ts validate-packaged-output \
+  pnpm exec tsx src/cli.ts prepare-macos-output \
     --output-directory "$builder_output" \
-    --platform macos \
     --channel "$channel" \
     --expected-version "$expected_version"
 )
 metadata_name=$(jq -er '.metadata | select(type == "string")' <<<"$packaged_output")
 artifact_relative_path=$(jq -er '.artifact | select(type == "string")' <<<"$packaged_output")
 blockmap_relative_path=$(jq -er '.blockmap | select(type == "string")' <<<"$packaged_output")
+dmg_relative_path=$(jq -er '.dmg | select(type == "string")' <<<"$packaged_output")
 metadata_path="$builder_output/$metadata_name"
 artifact_path="$builder_output/$artifact_relative_path"
 blockmap_path="$builder_output/$blockmap_relative_path"
+dmg_path="$builder_output/$dmg_relative_path"
 bash "$script_directory/validate-macos-library-validation.sh" "$artifact_path" "$work_directory/macos-library-validation"
+bash "$script_directory/validate-macos-dmg.sh" "$dmg_path" "$work_directory/macos-library-validation" "$work_directory/macos-dmg"
 payload_directory="$release_output_directory/payload"
 metadata_directory="$release_output_directory/metadata"
 mkdir -p -- "$payload_directory" "$metadata_directory"
 cp -- "$artifact_path" "$payload_directory/$(basename -- "$artifact_relative_path")"
 cp -- "$blockmap_path" "$payload_directory/$(basename -- "$blockmap_relative_path")"
+cp -- "$dmg_path" "$payload_directory/$(basename -- "$dmg_relative_path")"
 cp -- "$metadata_path" "$metadata_directory/$(basename -- "$metadata_name")"
