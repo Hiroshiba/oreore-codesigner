@@ -123,6 +123,7 @@ mkdir -p -- "$builder_output"
     --config "$source_directory/$builder_config" \
     --mac zip dmg \
     --x64 \
+    --config.dmg.filesystem=APFS \
     --publish never \
     "--config.directories.output=$builder_output" \
     --config.forceCodeSigning=true \
