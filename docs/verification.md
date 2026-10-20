@@ -39,6 +39,40 @@ DMG を含む 9 件の中央証明書による署名・公開は未検証です�
 NSIS Web は metadata の version と参照先を検証し、installer の size が metadata にある場合だけ実サイズと照合します。
 中央は DMG の hash と NSIS Web の installer と package の hash や package の実サイズを照合しないため、全 asset のサイズと hash が検証済みとは扱いません。
 
+## macOS DMG の局所確認
+
+DMG の生成設定を変更するときは、macOS 上で秘密鍵や証明書を使わず、署名済みアプリのファイル名と署名が梱包後も保たれることを確認します。
+実際の証明書による署名・公開と実機での導入は、別途確認します。
+
+1. 一時ディレクトリに検証用プロジェクトを用意し、`package.json` に検証用の `name` と `version`、対象ソースと同じ版に固定した electron-builder の依存を記載して `pnpm install --ignore-scripts` で導入します。`electron-builder.yml` には検証用の `appId`、`productName`、`dmg.title`、対象ソースと同じ `electronVersion` と `mac.identity: null` を設定します。
+2. 検証用の小さな app を作ります。`Contents/MacOS` に x64 と arm64 の universal Mach-O 実行ファイルを置き、`Contents/Info.plist` に bundle ID、名前、実行ファイル名、`APPL` の package type と version を記載します。`Contents/Resources/コーディング規約.md` を NFC のファイル名で用意します。
+3. `codesign --force --deep --sign - --timestamp=none "$fixture_app"` で ad-hoc 署名し、`codesign --verify --strict "$fixture_app"` が成功することを確認します。`fixture_app` は検証用 app の絶対パスです。
+4. 検証用プロジェクトで次を実行します。`fixture_output` は生成先の絶対パスです。
+
+```sh
+CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder \
+  --config electron-builder.yml \
+  --prepackaged "$fixture_app" \
+  --mac zip dmg \
+  --x64 \
+  --config.dmg.filesystem=APFS \
+  --publish never \
+  --config.mac.identity=null \
+  --config.directories.output="$fixture_output"
+```
+
+生成された DMG の絶対パスを `dmg_path`、マウント先の空ディレクトリを `mount_directory` とし、`hdiutil attach -readonly -nobrowse -mountpoint "$mount_directory" "$dmg_path"` で開いて次を確認します。
+
+| 確認対象         | 合格条件                                                                        |
+| ---------------- | ------------------------------------------------------------------------------- |
+| ファイルシステム | `diskutil info "$mount_directory"` で APFS かつ Volume Read-Only が Yes になる  |
+| 内容             | DMG 直下の app が一つで、`Applications` リンクの参照先が `/Applications` になる |
+| 署名             | DMG 内の app に対する `codesign --verify --strict` が成功する                   |
+| 日本語ファイル名 | 元アプリと DMG 内のファイル名のコードポイント列が一致し、NFC が保たれる         |
+| CDHash           | 元アプリと DMG 内の app に対する `codesign -d --verbose=4` の CDHash が一致する |
+
+確認の成功・失敗にかかわらず、`hdiutil detach "$mount_directory"` でマウントを解除します。
+
 ## 初回公開
 
 アプリ内更新から手動更新へ切り替える場合は、新版の公開前に[ソースの要件](source-requirements.md#更新方式)に沿って旧版の実装と更新先 URL を確認し、新版の更新 metadata への到達と自動取得・適用の有無を判定します。
