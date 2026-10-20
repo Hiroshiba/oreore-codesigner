@@ -4,6 +4,7 @@
 このリポジトリではテストコードを実装せず、CI の静的検査と以下の手動確認を行います。
 [main の Actions 実行 35689941519](https://github.com/Hiroshiba/oreore-codesigner/actions/runs/35689941519)では全ジョブが成功し、実際の証明書による macOS と Windows の署名・公開を確認しました。
 公開先の draft Release で 8 件の asset を確認し、macOS ZIP と通常 NSIS の更新 metadata の参照先、サイズ、hash が実ファイルと一致することを確認しました。
+DMG を含む 9 件の中央証明書による署名・公開は未検証です。
 中央証明書で署名した配布物の実機での起動・更新は未検証です。
 
 対象アプリの README で更新方式と利用者向けの手順を確認します。
@@ -24,26 +25,27 @@
 | ソース固定           | macOS と Windows が同じ source SHA を checkout し、公開前に tag が移動していれば停止する                                                                       |
 | source契約           | SemVer version、exact pnpm、electron-builder 26.16.1、build script、単一YAML、publish禁止、versionからのchannelが検証される                                    |
 | ビルド               | source で frozen install、build、electron-builder が成功し、source の設定と hook が成果物へ反映される                                                          |
-| macOS 署名           | electron-builder の署名が成功し、ZIP、blockmap、更新 metadata が生成される                                                                                     |
+| macOS 署名           | electron-builder の署名が成功し、ZIP、ZIP の blockmap、DMG、更新 metadata が生成される                                                                           |
 | macOS 署名条件       | 公開対象 ZIP の主実行ファイルから署名条件を取得し、Team ID のない Hardened Runtime で entitlement が true でなければ停止する                                   |
+| macOS DMG            | 読み取り専用の DMG の直下に app 一つと `/Applications` へのリンクがあり、app の署名と ZIP 内 app との CDHash が一致する                                          |
 | Windows 署名         | electron-builder の署名が成功し、通常 NSIS、blockmap、channel に対応する root metadata、NSIS Web metadataに対応する installer、`.nsis.7z` package が生成される |
-| 成果物選択           | metadataの参照名から下位directoryを含む成果物を一意に選び、余分な builder 出力を公開しない                                                                     |
-| 更新 metadata        | macOS ZIP と通常 NSIS の実ファイルの参照、サイズ、Base64 の SHA-512、外部 blockmap、version が一致する。`blockMapSize` がある場合だけ実サイズも一致する        |
+| 成果物選択           | metadataの参照名から下位directoryを含む成果物を一意に選び、macOS DMG 一件を含め、余分な builder 出力を公開しない                                              |
+| 更新 metadata        | macOS ZIP 一件と通常 NSIS の参照、サイズ、Base64 の SHA-512、外部 blockmap、version が実ファイルと一致する。`blockMapSize` がある場合だけ実サイズも一致する |
 | 公開先               | 既存かつ変更可能な Release だけを変更し、Release の本文などを編集しない                                                                                        |
 | 上書き公開           | 同名ファイルを置換し、配布ファイルと blockmap の後に更新 metadata を公開する                                                                                   |
 | 公開失敗と再実行     | 途中状態を確認し、同じ実行の署名済み成果物で修復できる                                                                                                         |
 | 後始末               | 一時的な P12、PFX、keychain、環境変数を削除し、処理と cleanup の両方の失敗を検出できる                                                                         |
 
 NSIS Web は metadata の version と参照先を検証し、installer の size が metadata にある場合だけ実サイズと照合します。
-中央は NSIS Web の installer と package の hash や package の実サイズを照合しないため、8 件すべてのサイズと hash が検証済みとは扱いません。
+中央は DMG の hash と NSIS Web の installer と package の hash や package の実サイズを照合しないため、全 asset のサイズと hash が検証済みとは扱いません。
 
 ## 初回公開
 
 アプリ内更新から手動更新へ切り替える場合は、新版の公開前に[ソースの要件](source-requirements.md#更新方式)に沿って旧版の実装と更新先 URL を確認し、新版の更新 metadata への到達と自動取得・適用の有無を判定します。
 
-1. draft Release のまま、両 OS の署名、対象 tag と source SHA、配布する 8 件の asset の存在を確認します。macOS は ZIP、blockmap、更新 metadata の 3 件、Windows は通常 NSIS、blockmap、更新 metadata、NSIS Web installer、`.nsis.7z` package の 5 件です。
-2. 管理者が draft Release からブラウザーで ZIP と通常 NSIS を取得し、以下の実機項目に沿って署名、導入、起動、バージョンと主要機能を確認します。NSIS Web installer の署名も確認します。
-3. Release を公開し、認証なしで ZIP、通常 NSIS、NSIS Web installer と package、更新 metadata と blockmap を取得できることを確認します。NSIS Web は installer からの package 取得と初回導入まで確認します。
+1. draft Release のまま、両 OS の署名、対象 tag と source SHA、配布する 9 件の asset の存在を確認します。macOS は DMG、ZIP、ZIP の blockmap、更新 metadata の 4 件、Windows は通常 NSIS、blockmap、更新 metadata、NSIS Web installer、`.nsis.7z` package の 5 件です。
+2. 管理者が draft Release からブラウザーで DMG と通常 NSIS を取得し、以下の実機項目に沿って署名、導入、起動、バージョンと主要機能を確認します。NSIS Web installer の署名も確認します。
+3. Release を公開し、認証なしで DMG、ZIP、通常 NSIS、NSIS Web installer と package、更新 metadata と blockmap を取得できることを確認します。NSIS Web は installer からの package 取得と初回導入まで確認します。
 4. 更新元がある場合は採用した方式で更新を確認します。手動更新への切り替えでも、公開前の判定で旧版が自動適用する場合はその経路で実機更新を、しない場合は手動移行を確認します。アプリ内更新を使う経路では旧版から新タグの Release URL へ到達し、差分更新と差分取得に失敗した場合の全量更新ができることを確認します。
 5. 確認後に利用者への案内を始めます。公開後の取得や導入・更新に失敗した場合は案内を停止し、[公開と再実行](operations.md)に沿って原因を解消し、修復と再確認を行います。
 
@@ -52,14 +54,14 @@ draft の間は匿名で NSIS Web の package やアプリ内更新のファイ�
 ## macOS 実機
 
 更新を検証するときは、連続する二つのアプリ version を用意します。
-初回導入はブラウザーで取得した ZIP を使い、quarantine 属性を保持します。
+初回導入はブラウザーで取得した DMG を使い、quarantine 属性を保持します。
 共通項目と、採用した更新方式および旧版からの移行に使う方式の項目を確認します。
 中央の署名条件検査は主実行ファイルの既知の組合せだけを扱います。
 GUI 起動時に Framework、Helper、ネイティブモジュールが読み込めるかは実機で確認します。
 
 | 確認対象                     | 合格条件                                                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| 初回導入                     | ZIP を展開してアプリを配置でき、OS の警告と本人による許可操作を記録し、起動、バージョンと主要機能を確認できる                  |
+| 初回導入                     | DMG を開いてアプリを Applications へ配置でき、OS の警告と本人による許可操作を記録し、起動、バージョンと主要機能を確認できる    |
 | 内部コードと署名             | Framework、Helper、ネイティブモジュールを含む署名と必要な entitlements を確認できる                                            |
 | 更新の共通項目               | 同じ bundle ID の次 version へ更新して起動でき、version、設定と利用者データの保持を確認できる                                  |
 | 手動更新                     | 対象 Release から新しい ZIP を取得し、展開したアプリの署名者と証明書を確認してから、アプリを終了して既存アプリを置き換えられる |

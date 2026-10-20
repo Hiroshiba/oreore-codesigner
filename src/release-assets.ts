@@ -82,6 +82,9 @@ function assertMetadataFile(
   if (!metadata.files.some((file) => file.url === metadata.path)) {
     throw new Error(`metadata pathがfilesにありません: ${metadataName}`);
   }
+  if (metadataKind === ".zip" && metadata.files.length !== 1) {
+    throw new Error(`macOS metadataはZIP一件だけを参照してください: ${metadataName}`);
+  }
   const fileNames = new Set<string>();
   for (const file of metadata.files) {
     const key = file.url.toLowerCase();
@@ -177,5 +180,9 @@ export function validateReleaseAssets(assetsDirectory: string, expectedVersion: 
   }
   if (!metadataKinds.has(".zip") || !metadataKinds.has(".exe")) {
     throw new Error("macOSとWindowsのmetadataが必要です");
+  }
+  const dmgs = [...assets.values()].filter((asset) => extname(asset.name).toLowerCase() === ".dmg");
+  if (dmgs.length !== 1) {
+    throw new Error("macOS DMGが一件必要です");
   }
 }

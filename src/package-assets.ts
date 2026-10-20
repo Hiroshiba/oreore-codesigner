@@ -1,6 +1,6 @@
-import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, sep } from "node:path";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { parseSemVer, parseUpdateMetadata, type UpdateMetadata } from "./schema.js";
 
@@ -58,6 +58,7 @@ export type MacosPackagedOutput = {
   metadata: string;
   artifact: string;
   blockmap: string;
+  dmg: string;
 };
 
 export type WindowsPackagedOutput = {
@@ -70,6 +71,12 @@ export type WindowsPackagedOutput = {
 };
 
 export type PackagedOutput = MacosPackagedOutput | WindowsPackagedOutput;
+
+type MacosSelection = {
+  output: MacosPackagedOutput;
+  metadata: UpdateMetadata;
+  zipFile: UpdateMetadata["files"][number];
+};
 
 function assertDirectory(path: string): void {
   const information = lstatSync(path);
@@ -145,19 +152,49 @@ function selectMacosOutput(
   builderOutput: string,
   channel: string,
   expectedVersion: string
-): MacosPackagedOutput {
+): MacosSelection {
   const metadataName = `${channel}-mac.yml`;
   const metadataPath = join(builderOutput, metadataName);
   assertRegularFile(metadataPath, `macOS metadata ${metadataName}`);
   const metadata = parseMetadataFile(metadataPath, expectedVersion);
   assertMetadataPath(metadata, ".zip");
+  const zipFiles = metadata.files.filter((file) => extname(file.url).toLowerCase() === ".zip");
+  const dmgFiles = metadata.files.filter((file) => extname(file.url).toLowerCase() === ".dmg");
+  if (metadata.files.length !== 2 || zipFiles.length !== 1 || dmgFiles.length !== 1) {
+    throw new Error(`macOS metadataにはZIPとDMGが一件ずつ必要です: ${metadataPath}`);
+  }
+  const zipFile = zipFiles[0];
+  const dmgFile = dmgFiles[0];
+  if (zipFile == undefined || dmgFile == undefined) {
+    throw new Error(`macOS metadataのZIPまたはDMGがありません: ${metadataPath}`);
+  }
+  if (metadata.path !== zipFile.url || metadata.sha512 !== zipFile.sha512) {
+    throw new Error(`macOS metadataの更新先がZIPと一致しません: ${metadataPath}`);
+  }
   const artifact = findUniqueFile(builderOutput, metadata.path);
   const blockmap = selectExternalBlockmap(builderOutput, metadata.path);
+  const dmg = findUniqueFile(builderOutput, dmgFile.url);
+  for (const { file, selected } of [
+    { file: zipFile, selected: artifact },
+    { file: dmgFile, selected: dmg }
+  ]) {
+    if (
+      basename(selected.absolutePath) !== file.url ||
+      lstatSync(selected.absolutePath).size !== file.size
+    ) {
+      throw new Error(`macOS metadataのbasenameまたはsizeが実fileと一致しません: ${file.url}`);
+    }
+  }
   return {
-    platform: "macos",
-    metadata: metadataName,
-    artifact: artifact.relativePath,
-    blockmap: blockmap.relativePath
+    output: {
+      platform: "macos",
+      metadata: metadataName,
+      artifact: artifact.relativePath,
+      blockmap: blockmap.relativePath,
+      dmg: dmg.relativePath
+    },
+    metadata,
+    zipFile
   };
 }
 
@@ -215,6 +252,33 @@ function selectWindowsOutput(
   };
 }
 
+function assertPackagedOutputInput(
+  builderOutput: string,
+  channel: string,
+  expectedVersion: string
+): void {
+  assertDirectory(builderOutput);
+  parseSemVer(expectedVersion);
+  if (channel.length === 0 || !/^[0-9A-Za-z-]+$/.test(channel)) {
+    throw new Error(`channelが不正です: ${channel}`);
+  }
+}
+
+/** macOSのbuilder出力を選び、更新metadataをZIP専用に整えます。 */
+export function prepareMacosOutput(
+  builderOutput: string,
+  channel: string,
+  expectedVersion: string
+): MacosPackagedOutput {
+  assertPackagedOutputInput(builderOutput, channel, expectedVersion);
+  const selection = selectMacosOutput(builderOutput, channel, expectedVersion);
+  writeFileSync(
+    join(builderOutput, selection.output.metadata),
+    stringifyYaml({ ...selection.metadata, files: [selection.zipFile] })
+  );
+  return selection.output;
+}
+
 /** electron-builderの出力から現在channelの公開対象を検証して選びます。 */
 export function validatePackagedOutput(
   builderOutput: string,
@@ -222,13 +286,9 @@ export function validatePackagedOutput(
   channel: string,
   expectedVersion: string
 ): PackagedOutput {
-  assertDirectory(builderOutput);
-  parseSemVer(expectedVersion);
-  if (channel.length === 0 || !/^[0-9A-Za-z-]+$/.test(channel)) {
-    throw new Error(`channelが不正です: ${channel}`);
-  }
+  assertPackagedOutputInput(builderOutput, channel, expectedVersion);
   if (platform === "macos") {
-    return selectMacosOutput(builderOutput, channel, expectedVersion);
+    return selectMacosOutput(builderOutput, channel, expectedVersion).output;
   }
   return selectWindowsOutput(builderOutput, channel, expectedVersion);
 }

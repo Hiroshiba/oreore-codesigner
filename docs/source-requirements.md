@@ -32,13 +32,13 @@ pnpm run build
 その後、ソース側の electron-builder を次の相当する引数で実行します。
 
 ```text
-electron-builder --mac zip --x64 --publish never
+electron-builder --mac zip dmg --x64 --publish never
 electron-builder --win nsis nsis-web --x64 --publish never
 ```
 
-中央は出力先、x64、macOS ZIP、通常 NSIS、NSIS Web、root と platform の `forceCodeSigning`、現在の channel の更新 metadata、root の generic publish URL を CLI で指定します。
+中央は出力先、x64、macOS ZIP と DMG、通常 NSIS、NSIS Web、root と platform の `forceCodeSigning`、現在の channel の更新 metadata、root の generic publish URL を CLI で指定します。
 公開先、対象 tag、署名必須、version と channel は中央が所有し、source の app 設定を再構築しません。
-`asar`、`asarUnpack`、`extraResources`、アプリ固有の hook、appId、productName、GUID、publisher、icon、entitlements、artifactName、NSIS 設定はソース側の builder が直接反映します。
+`asar`、`asarUnpack`、`extraResources`、アプリ固有の hook、appId、productName、GUID、publisher、icon、entitlements、artifactName、DMG と NSIS の設定はソース側の builder が直接反映します。
 ビルド時点で署名用秘密鍵や公開用 token をアプリへ埋め込まないでください。
 
 ## 署名と成果物
@@ -46,12 +46,14 @@ electron-builder --win nsis nsis-web --x64 --publish never
 macOS のジョブは repository secret の P12 を `CSC_LINK`、パスワードを `CSC_KEY_PASSWORD` として electron-builder へ渡します。
 Hardened Runtime が有効で Team ID がない場合、主実行ファイルの `com.apple.security.cs.disable-library-validation` をソース側の `mac.entitlements` が参照するファイルで true にしてください。
 中央は公開対象 ZIP 内の主実行ファイルからこれらの署名条件を確認し、満たさない ZIP を公開用成果物へ移しません。
+DMG はルートにアプリ一つと `/Applications` へのリンクを含めます。中央は DMG を読み取り専用で開き、内包アプリの署名と ZIP 内アプリとの CDHash 一致を確認してから公開用成果物へ移します。
 中央で entitlements を付与・上書きしません。
 
 Windows のジョブは PFX とパスワードを `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` として electron-builder へ渡します。
 署名 hash、publisher、GUID、NSIS 設定はソース側の設定を使います。
 
-macOS は ZIP、外部 blockmap、channel に対応する `*-mac.yml` の更新 metadata を、Windows は通常 NSIS の installer、外部 blockmap、channel に対応する root の `.yml` と、NSIS Web metadataを基準に選ぶ installer、`.nsis.7z` package を生成できなければなりません。
+macOS は ZIP、外部 blockmap、DMG、channel に対応する `*-mac.yml` の更新 metadata を、Windows は通常 NSIS の installer、外部 blockmap、channel に対応する root の `.yml` と、NSIS Web metadataを基準に選ぶ installer、`.nsis.7z` package を生成できなければなりません。
+macOS の公開用更新 metadata は ZIP 一件だけを参照します。DMG は初回導入用として別に公開します。
 通常 NSIS の更新 metadata は通常 installer を参照します。
 余分なbuilder出力は無視し、artifactNameが下位directoryを含む場合はmetadata参照名から再帰的に一意な実fileを選んでRelease assetのbasenameへ集約します。
 

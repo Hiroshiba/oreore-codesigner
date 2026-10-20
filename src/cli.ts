@@ -1,12 +1,13 @@
 import { parseArgs } from "node:util";
 import { z } from "zod";
-import { validatePackagedOutput } from "./package-assets.js";
+import { prepareMacosOutput, validatePackagedOutput } from "./package-assets.js";
 import { validateReleaseAssets } from "./release-assets.js";
 import { validateSourceContract } from "./source-contract.js";
 
 const commandSchema = z.union([
   z.literal("validate-release-assets"),
   z.literal("validate-source"),
+  z.literal("prepare-macos-output"),
   z.literal("validate-packaged-output")
 ]);
 const pathSchema = z.string().min(1, "pathを空にできません");
@@ -29,6 +30,7 @@ const packagedOutputOptionsSchema = z
     "expected-version": z.string().min(1, "expected-versionを空にできません")
   })
   .strict();
+const macosOutputOptionsSchema = packagedOutputOptionsSchema.omit({ platform: true });
 
 type ParsedOptions = Record<string, string>;
 type ParsedCommand = {
@@ -86,6 +88,16 @@ function runCli(args: string[]): void {
         builder_config: contract.builderConfig
       })}\n`
     );
+    return;
+  }
+  if (parsed.command === "prepare-macos-output") {
+    const options = macosOutputOptionsSchema.parse(parsed.options);
+    const result = prepareMacosOutput(
+      options["output-directory"],
+      options.channel,
+      options["expected-version"]
+    );
+    process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
   const options = packagedOutputOptionsSchema.parse(parsed.options);
