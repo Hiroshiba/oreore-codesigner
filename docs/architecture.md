@@ -23,8 +23,8 @@
 
 electron-builder の appId、productName、GUID、publisher、icon、entitlements、artifactName、NSIS 設定、hook はソース側の設定を正本として直接使います。
 中央は対象ソースの設定を再構築せず、ソース側の electron-builder 設定を直接読み込ませます。
-`electron-builder` の CLI には version、channel、OS、x64、出力先、macOS ZIP と DMG、通常 NSIS、NSIS Web、root と platform の署名強制、現在の channel だけの更新 metadata、root の対象 Release 用 generic publish URLを指定します。
-source の builder 設定にある app 固有値は中央へ転記せず、中央が所有する公開先と署名必須だけを CLI で上書きします。
+`electron-builder` の CLI には version、channel、OS、x64、出力先、macOS ZIP と DMG、DMG のファイルシステム APFS、通常 NSIS、NSIS Web、root と platform の署名強制、現在の channel だけの更新 metadata、root の対象 Release 用 generic publish URLを指定します。
+source の builder 設定にある app 固有値は中央へ転記せず、中央が所有する公開先、署名必須、DMG のファイルシステムを CLI で上書きします。
 source の root、platform、target の publish は契約で禁止し、公開先の優先順位を source 側へ残しません。
 
 macOS は electron-builder に `CSC_LINK` と `CSC_KEY_PASSWORD` を渡し、一時 keychain の作成と削除を任せます。
