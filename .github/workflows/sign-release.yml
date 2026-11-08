@@ -11,6 +11,14 @@ on:
         description: 対象sourceの固定tag
         required: true
         type: string
+      macos_arch:
+        description: macOSアプリのCPU
+        required: true
+        type: choice
+        default: x64
+        options:
+          - x64
+          - arm64
 
 permissions:
   contents: read
@@ -132,7 +140,7 @@ jobs:
 
   package-macos:
     needs: resolve-source
-    runs-on: macos-15-intel
+    runs-on: ${{ inputs.macos_arch == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     steps:
       - name: 中央repoをcheckout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -147,6 +155,22 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.14.0
+
+      - name: macOSのCPUを検証
+        env:
+          MACOS_ARCH: ${{ inputs.macos_arch }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case "$MACOS_ARCH" in
+            x64) expected_uname=x86_64 ;;
+            arm64) expected_uname=arm64 ;;
+            *) printf '%s\n' 'macos_archはx64またはarm64を指定してください' >&2; exit 1 ;;
+          esac
+          if [[ "$(uname -m)" != "$expected_uname" || "$(node -p 'process.arch')" != "$MACOS_ARCH" ]]; then
+            printf '%s\n' 'macOS runnerまたはNodeのCPUがmacos_archと一致しません' >&2
+            exit 1
+          fi
 
       - name: 中央setup
         run: bash scripts/workflow/setup-central.sh
@@ -195,6 +219,7 @@ jobs:
           EXPECTED_VERSION: ${{ needs.resolve-source.outputs.version }}
           CHANNEL: ${{ needs.resolve-source.outputs.channel }}
           BUILDER_CONFIG: ${{ needs.resolve-source.outputs.builder_config }}
+          MACOS_ARCH: ${{ inputs.macos_arch }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -205,7 +230,8 @@ jobs:
             "$RUNNER_TEMP/macos-release" \
             "$EXPECTED_VERSION" \
             "$CHANNEL" \
-            "$BUILDER_CONFIG"
+            "$BUILDER_CONFIG" \
+            "$MACOS_ARCH"
 
       - name: macOS signed artifactを保存
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

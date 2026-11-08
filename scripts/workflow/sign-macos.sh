@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-if [[ $# -ne 7 ]]; then
-  printf '%s\n' '使い方: sign-macos.sh source-directory repository tag release-output-directory expected-version channel builder-config' >&2
+if [[ $# -ne 8 ]]; then
+  printf '%s\n' '使い方: sign-macos.sh source-directory repository tag release-output-directory expected-version channel builder-config macos-arch' >&2
   exit 2
 fi
 
@@ -13,6 +13,7 @@ release_output_directory=$4
 expected_version=$5
 channel=$6
 builder_config=$7
+macos_arch=$8
 
 if [[ ! -d "$source_directory" || -L "$source_directory" ]]; then
   printf '%s\n' 'source directoryが通常directoryではありません' >&2
@@ -32,6 +33,10 @@ if [[ -z "$expected_version" || ! "$channel" =~ ^[0-9A-Za-z-]+$ ]]; then
 fi
 if [[ "$builder_config" != electron-builder.yml && "$builder_config" != electron-builder.yaml ]]; then
   printf '%s\n' 'builder configはelectron-builder.ymlまたはelectron-builder.yamlでなければなりません' >&2
+  exit 1
+fi
+if [[ "$macos_arch" != x64 && "$macos_arch" != arm64 ]]; then
+  printf '%s\n' 'macos archはx64またはarm64を指定してください' >&2
   exit 1
 fi
 if [[ -z "${CSC_LINK:-}" || -z "${CSC_KEY_PASSWORD:-}" ]]; then
@@ -122,7 +127,7 @@ mkdir -p -- "$builder_output"
   pnpm exec electron-builder \
     --config "$source_directory/$builder_config" \
     --mac zip dmg \
-    --x64 \
+    "--$macos_arch" \
     --config.dmg.filesystem=APFS \
     --publish never \
     "--config.directories.output=$builder_output" \
@@ -153,8 +158,8 @@ metadata_path="$builder_output/$metadata_name"
 artifact_path="$builder_output/$artifact_relative_path"
 blockmap_path="$builder_output/$blockmap_relative_path"
 dmg_path="$builder_output/$dmg_relative_path"
-bash "$script_directory/validate-macos-library-validation.sh" "$artifact_path" "$work_directory/macos-library-validation"
-bash "$script_directory/validate-macos-dmg.sh" "$dmg_path" "$work_directory/macos-library-validation" "$work_directory/macos-dmg"
+bash "$script_directory/validate-macos-zip.sh" "$artifact_path" "$work_directory/macos-zip" "$macos_arch" "$package_json"
+bash "$script_directory/validate-macos-dmg.sh" "$dmg_path" "$work_directory/macos-zip" "$work_directory/macos-dmg"
 payload_directory="$release_output_directory/payload"
 metadata_directory="$release_output_directory/metadata"
 mkdir -p -- "$payload_directory" "$metadata_directory"
