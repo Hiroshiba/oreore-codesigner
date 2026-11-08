@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-if [[ $# -ne 2 ]]; then
-  printf '%s\n' '使い方: validate-macos-library-validation.sh zip-path extraction-directory' >&2
+if [[ $# -ne 4 ]]; then
+  printf '%s\n' '使い方: validate-macos-zip.sh zip-path extraction-directory macos-arch source-package-json' >&2
   exit 2
 fi
 
 zip_path=$1
 extraction_directory=$2
+macos_arch=$3
+source_package_json=$4
+
+case "$macos_arch" in
+  x64) expected_macho_arch=x86_64 ;;
+  arm64) expected_macho_arch=arm64 ;;
+  *) printf '%s\n' 'macos archはx64またはarm64を指定してください' >&2; exit 1 ;;
+esac
 
 if [[ ! -f "$zip_path" || -L "$zip_path" ]]; then
   printf '%s\n' 'macOS ZIPが通常fileではありません' >&2
@@ -15,6 +23,10 @@ if [[ ! -f "$zip_path" || -L "$zip_path" ]]; then
 fi
 if [[ -e "$extraction_directory" || -L "$extraction_directory" ]]; then
   printf '%s\n' 'macOS ZIPの展開先は存在しないdirectoryを指定してください' >&2
+  exit 1
+fi
+if [[ ! -f "$source_package_json" || -L "$source_package_json" ]]; then
+  printf '%s\n' 'source package.jsonが通常fileではありません' >&2
   exit 1
 fi
 
@@ -43,6 +55,40 @@ executable_path="$app_path/Contents/MacOS/$executable_name"
 if [[ ! -f "$executable_path" || -L "$executable_path" ]]; then
   printf '%s\n' 'macOS appの主実行ファイルが通常fileではありません' >&2
   exit 1
+fi
+
+validate_binary_architecture() {
+  local binary_path=$1
+  local binary_name=$2
+  local actual_arch
+  actual_arch=$(lipo -archs "$binary_path")
+  if [[ "$actual_arch" != "$expected_macho_arch" ]]; then
+    printf '%s\n' "macOS appの${binary_name}のCPUが${macos_arch}と一致しません: $actual_arch" >&2
+    exit 1
+  fi
+}
+
+validate_binary_architecture "$executable_path" '主実行ファイル'
+if [[ "$(jq -r '(.dependencies // {}) | has("ffmpeg-static")' "$source_package_json")" == true ]]; then
+  ffmpeg_paths=(
+    "$app_path/Contents/Resources/app/node_modules/ffmpeg-static/ffmpeg"
+    "$app_path/Contents/Resources/app.asar.unpacked/node_modules/ffmpeg-static/ffmpeg"
+  )
+  ffmpeg_count=0
+  for ffmpeg_path in "${ffmpeg_paths[@]}"; do
+    if [[ -e "$ffmpeg_path" || -L "$ffmpeg_path" ]]; then
+      if [[ ! -f "$ffmpeg_path" || -L "$ffmpeg_path" ]]; then
+        printf '%s\n' 'macOS appのFFmpegが通常fileではありません' >&2
+        exit 1
+      fi
+      validate_binary_architecture "$ffmpeg_path" 'FFmpeg'
+      ffmpeg_count=$((ffmpeg_count + 1))
+    fi
+  done
+  if (( ffmpeg_count != 1 )); then
+    printf '%s\n' 'macOS appにFFmpegが一つ必要です' >&2
+    exit 1
+  fi
 fi
 
 signature_info="$extraction_directory/signature-info.txt"

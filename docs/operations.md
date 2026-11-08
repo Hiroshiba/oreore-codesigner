@@ -11,7 +11,7 @@
 1. GitHub App の Selected repositories に対象リポジトリを含めます。
 2. 対象アプリの README に更新方式と利用者向けの手順を記載し、公開するソースへ tag を付け、その tag の GitHub Release をあらかじめ作成します。初回公開は draft にします。既存 Release を使う場合は、同名ファイルが置換されることを確認します。
 3. macOS と Windows の署名に使う repository secret が設定済みであることを確認します。
-4. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository` と `tag` を指定して実行します。
+4. 中央リポジトリの Actions から `sign-release` を選び、既定ブランチで `repository`、`tag`、macOS の `macos_arch` を指定して実行します。`macos_arch` は x64 または arm64 から選び、既定値は x64 です。
 5. 両 OS の署名とアップロードが完了したら、対象リポジトリ、タグ、固定したコミット SHA、署名と配布する 9 件の asset を確認します。macOS は DMG、ZIP、ZIP の blockmap、更新 metadata の 4 件、Windows は通常 NSIS、blockmap、更新 metadata、NSIS Web installer、`.nsis.7z` package の 5 件です。
 6. 初回公開は draft のまま、管理者が DMG と通常 NSIS をブラウザーで取得し、署名、実機導入、起動、バージョンと主要機能を確認します。NSIS Web installer の署名も確認します。
 7. 管理者が Release を公開し、認証なしで全配布ファイルを取得できることと、NSIS Web installer による package の取得・導入を確認します。更新元がある場合は、採用した方式と公開前に確認した移行条件に沿って旧版からの更新を[実機検証](verification.md)で確認します。アプリ内更新を使う経路では新タグの Release URL への到達と差分・全量更新を確認します。
@@ -26,6 +26,8 @@ GitHub CLI では、中央リポジトリの作業ディレクトリから次の
 ```sh
 gh workflow run sign-release.yml -f repository=owner/personal-tool -f tag=v1.2.3
 ```
+
+macOS arm64 を配布する場合は `-f macos_arch=arm64` を加えます。
 
 `resolve-source` は tag を checkout して一度だけ source SHA を確定します。
 macOS と Windows は同じ SHA を checkout し、両方の package job が成功したときだけ公開へ進みます。

@@ -17,7 +17,7 @@
 ## 導入と公開
 
 1. [GitHub の初期設定](docs/github-setup.md)に従い、GitHub App、署名証明書、repository secret を設定します。対象範囲は App の Selected repositories で管理します。
-2. [ソースの要件](docs/source-requirements.md)を確認します。リポジトリのルートにある `package.json`、`pnpm-lock.yaml`、electron-builder の YAML 設定を使い、秘密情報を使わずに x64 のアプリ本体をビルドします。
+2. [ソースの要件](docs/source-requirements.md)を確認します。リポジトリのルートにある `package.json`、`pnpm-lock.yaml`、electron-builder の YAML 設定を使い、秘密情報を使わずに指定した macOS の CPU と Windows x64 のアプリ本体をビルドします。
 3. 初回公開では対象タグの draft Release を作成し、[運用手順](docs/operations.md)に従って `sign-release` を実行します。
 4. [端末の初期設定](docs/device-setup.md)を行い、draft のまま署名、9 件の配布ファイル、DMG と通常 NSIS による実機導入を確認します。
 5. Release を公開し、認証なしでの NSIS Web の取得と導入を確認します。採用した方式で旧版からの更新も[検証項目](docs/verification.md)に沿って確認してから、利用者へ案内します。更新元がない初回の署名付き配布は「更新未確認」と記録します。

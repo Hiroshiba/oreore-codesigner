@@ -23,9 +23,10 @@
 
 electron-builder の appId、productName、GUID、publisher、icon、entitlements、artifactName、NSIS 設定、hook はソース側の設定を正本として直接使います。
 中央は対象ソースの設定を再構築せず、ソース側の electron-builder 設定を直接読み込ませます。
-`electron-builder` の CLI には version、channel、OS、x64、出力先、macOS ZIP と DMG、DMG のファイルシステム APFS、通常 NSIS、NSIS Web、root と platform の署名強制、現在の channel だけの更新 metadata、root の対象 Release 用 generic publish URLを指定します。
+`electron-builder` の CLI には version、channel、OS、macOS で選択した CPU、Windows x64、出力先、macOS ZIP と DMG、DMG のファイルシステム APFS、通常 NSIS、NSIS Web、root と platform の署名強制、現在の channel だけの更新 metadata、root の対象 Release 用 generic publish URLを指定します。
 source の builder 設定にある app 固有値は中央へ転記せず、中央が所有する公開先、署名必須、DMG のファイルシステムを CLI で上書きします。
 source の root、platform、target の publish は契約で禁止し、公開先の優先順位を source 側へ残しません。
+macOS は `macos_arch` で x64 または arm64 を選び、既定値を x64 とします。選択した CPU と runner、Node の CPU を依存関係の導入前に照合します。`ffmpeg-static` は導入時の Node の CPU に対応する実行ファイルを取得するため、同じ CPU の runner でソースをビルドします。Windows は x64 のままです。
 
 macOS は electron-builder に `CSC_LINK` と `CSC_KEY_PASSWORD` を渡し、一時 keychain の作成と削除を任せます。
 electron-builder は `security find-identity -v` で有効な identity だけを探すため、署名の前に公開証明書を runner の admin 信頼設定へ `codeSign` 用途で登録します。
@@ -39,7 +40,7 @@ Windows は `WIN_CSC_LINK`、`WIN_CSC_KEY_PASSWORD` だけを使い、中央で 
 
 macOS は一度の electron-builder 実行で同じ署名済みアプリから ZIP と DMG を作り、ZIP の外部 blockmap と channel に対応する root の `*-mac.yml` 更新 metadata を公開します。
 electron-builder 26.16.1 が出力する更新 metadata の `files` には DMG も含まれるため、中央は ZIP と DMG を一件ずつ選び、公開する metadata の `files` を ZIP 一件に整えます。`path` と `sha512` は ZIP の値と一致させます。DMG の blockmap は公開しません。
-選択した ZIP を展開して app の主実行ファイルから署名情報を取得し、Hardened Runtime が有効で Team ID がなく `com.apple.security.cs.disable-library-validation` が true でない場合は、公開用成果物の作成前に停止します。
+選択した ZIP を展開して app の主実行ファイルと、ソースが `ffmpeg-static` に依存する場合は同梱 FFmpeg の CPU を検査します。主実行ファイルから署名情報を取得し、Hardened Runtime が有効で Team ID がなく `com.apple.security.cs.disable-library-validation` が true でない場合は、公開用成果物の作成前に停止します。
 署名情報や entitlements の取得・解析に失敗した場合も停止します。
 DMG は読み取り専用でマウントし、ルートの app 一つと `/Applications` へのリンクを確認します。ZIP と DMG の app の署名を検証し、CDHash が一致しない場合も公開用成果物の作成前に停止します。
 Windows は通常 NSIS の installer、外部 blockmap、channel に対応する root の更新 metadata と、`nsis-web` 配下の metadata を基準に選ぶ installer、`.nsis.7z` package を生成します。

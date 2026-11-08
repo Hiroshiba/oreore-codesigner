@@ -23,10 +23,12 @@ DMG を含む 9 件の中央証明書による署名・公開は未検証です�
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 対象リポジトリと入力 | repository と tag で実行でき、App の Selected repositories の範囲だけへアクセスできる                                                                          |
 | ソース固定           | macOS と Windows が同じ source SHA を checkout し、公開前に tag が移動していれば停止する                                                                       |
+| macOS の CPU         | x64 は Intel runner と Node x64、arm64 は ARM runner と Node arm64 で依存関係を導入し、選択した CPU でビルドする                 |
 | source契約           | SemVer version、exact pnpm、electron-builder 26.16.1、build script、単一YAML、publish禁止、versionからのchannelが検証される                                    |
 | ビルド               | source で frozen install、build、electron-builder が成功し、source の設定と hook が成果物へ反映される                                                          |
 | macOS 署名           | electron-builder の署名が成功し、ZIP、ZIP の blockmap、DMG、更新 metadata が生成される                                                                           |
 | macOS 署名条件       | 公開対象 ZIP の主実行ファイルから署名条件を取得し、Team ID のない Hardened Runtime で entitlement が true でなければ停止する                                   |
+| macOS の実行ファイル | ZIP 内の主実行ファイルと、ソースが `ffmpeg-static` に依存する場合は同梱 FFmpeg の CPU が選択値と一致する                        |
 | macOS DMG            | 読み取り専用の DMG の直下に app 一つと `/Applications` へのリンクがあり、app の署名と ZIP 内 app との CDHash が一致する                                          |
 | Windows 署名         | electron-builder の署名が成功し、通常 NSIS、blockmap、channel に対応する root metadata、NSIS Web metadataに対応する installer、`.nsis.7z` package が生成される |
 | 成果物選択           | metadataの参照名から下位directoryを含む成果物を一意に選び、macOS DMG 一件を含め、余分な builder 出力を公開しない                                              |
@@ -90,6 +92,7 @@ draft の間は匿名で NSIS Web の package やアプリ内更新のファイ�
 更新を検証するときは、連続する二つのアプリ version を用意します。
 初回導入はブラウザーで取得した DMG を使い、quarantine 属性を保持します。
 共通項目と、採用した更新方式および旧版からの移行に使う方式の項目を確認します。
+CPU を変更する場合は、旧版からの更新、再起動後の起動、設定と利用者データの保持を変更先の CPU の実機で確認します。
 中央の署名条件検査は主実行ファイルの既知の組合せだけを扱います。
 GUI 起動時に Framework、Helper、ネイティブモジュールが読み込めるかは実機で確認します。
 

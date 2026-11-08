@@ -33,10 +33,12 @@ pnpm run build
 
 ```text
 electron-builder --mac zip dmg --x64 --config.dmg.filesystem=APFS --publish never
+electron-builder --mac zip dmg --arm64 --config.dmg.filesystem=APFS --publish never
 electron-builder --win nsis nsis-web --x64 --publish never
 ```
 
-中央は出力先、x64、macOS ZIP と DMG、DMG のファイルシステム APFS、通常 NSIS、NSIS Web、root と platform の `forceCodeSigning`、現在の channel の更新 metadata、root の generic publish URL を CLI で指定します。
+中央は出力先、macOS で選択した CPU、Windows x64、macOS ZIP と DMG、DMG のファイルシステム APFS、通常 NSIS、NSIS Web、root と platform の `forceCodeSigning`、現在の channel の更新 metadata、root の generic publish URL を CLI で指定します。
+macOS は `macos_arch` で x64 または arm64 を選び、既定値は x64 です。中央は依存関係の導入前に runner と Node の CPU を確認し、選択した CPU でビルドします。`ffmpeg-static` に依存する場合は、同梱された FFmpeg も選択した CPU と一致する必要があります。
 公開先、対象 tag、署名必須、version と channel は中央が所有し、source の app 設定を再構築しません。
 `asar`、`asarUnpack`、`extraResources`、アプリ固有の hook、appId、productName、GUID、publisher、icon、entitlements、artifactName、ファイルシステムを除く DMG の設定、NSIS の設定はソース側の builder が直接反映します。
 DMG のファイルシステムは中央で APFS に固定し、日本語ファイル名の正規化による署名の破損を防ぎます。
